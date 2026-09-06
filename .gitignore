@@ -1,0 +1,21 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Datos
+data/*.csv
+
+# Permitir archivos de referencia si posteriormente se necesitan
+!data/.gitkeep
+
+
+# Entornos y configuración local
+.env
+.DS_Store
