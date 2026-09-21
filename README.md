@@ -21,6 +21,17 @@ El análisis se centra exclusivamente en el **comportamiento histórico del emis
 * Generar un dataset sintético de transacciones y perfiles de usuario.
 * Estructurar el proyecto y organizar los archivos necesarios para las siguientes etapas.
 
+## Etapa 2: Ingeniería de características
+
+## Actividades de la etapa
+* Analizar las variables disponibles en el dataset y determinar cuáles serán utilizadas por el modelo.
+* Crear características derivadas de cada transacción.
+* Construir características relacionadas con el perfil histórico del usuario, utilizando únicamente información disponible antes de la transacción analizada.
+* Incorporar características temporales, monetarias, geográficas, de dispositivo y de destinatario.
+* Calcular indicadores de desviación respecto al comportamiento habitual del usuario.
+* Preparar el conjunto final de características que será utilizado posteriormente por el modelo supervisado.
+* Evitar fuga de información (data leakage) asegurando que las características de una transacción no utilicen información futura.
+
 ### Estructura del proyecto
 
 ```text
