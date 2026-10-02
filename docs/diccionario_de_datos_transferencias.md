@@ -1,162 +1,113 @@
-# Diccionario de datos: tabla de transacciones
+# Diccionario de datos, especificación y justificación de campos
 
-Este documento define y justifica la tabla de transacciones del dataset **sintético** del proyecto. Para cada campo se indica su definición, su nivel de respaldo (qué está verificado y qué es un supuesto del equipo) y el resultado del filtro de tres preguntas que se usó para decidir si el campo se incluye. Las características derivadas y el diseño del generador se documentarán por separado; aquí solo se justifica por qué cada campo existe.
+## 1. Propósito del documento
 
----
+Este documento define el diccionario de datos del generador sintético de transferencias SPI y explica la especificación funcional de cada campo. También documenta la justificación analítica de las variables para un caso de detección de fraude en transferencias digitales.
 
-## 1. Alcance y perspectiva
+El diseño combina atributos de identificación transaccional, contexto temporal, comportamiento monetario, dispositivo, red y geolocalización. Esta combinación sigue una lógica de monitoreo basada en comportamiento: evaluar la operación actual frente al perfil esperado de una cuenta y añadir señales de identidad/contexto digital, tales como dispositivo, IP y ubicación. La orientación es consistente con guías de monitoreo transaccional que consideran valor, naturaleza y origen/destino de la operación, y con enfoques de perfilado que usan dispositivo, dirección IP, geolocalización y patrones de uso para detectar anomalías.
 
-- **Datos sintéticos.** Los datos reales de transacciones SPI/QR con fraude etiquetado no son públicos. El dataset se generará con escenarios de fraude definidos por reglas de negocio probabilísticas, cuyos parámetros se declaran como supuestos ajustables (sección 6).
-- **Perspectiva: motor antifraude de un banco emisor.** El sistema puntúa las transferencias iniciadas por los clientes de **un solo banco**. Por eso ve los datos de su propia app (dispositivo, IP, ubicación) y no ve el comportamiento de otros bancos. Esto es una decisión de alcance del proyecto, no una columna de la tabla.
-- **Nombre del sistema.** El proyecto usa "SIPAP"; el BCP lo rebautizó **SIP** en 2026. Ambos nombres se refieren al mismo sistema.
-- **Unidad de la tabla.** Una fila es una transferencia iniciada por un cliente del banco emisor y evaluada por el modelo.
-- **Período simulado.** 52 semanas (15/09/2025 a 13/09/2026) con fechas **simuladas**: un año típico bajo el régimen actual del sistema, aplicado a todas las fechas.
+## 2. Alcance y convenciones
 
-## 2. Leyenda
+### 2.1 Granularidad
 
-**Nivel de respaldo**
+Cada fila representa una transferencia individual iniciada por una cuenta emisora en el período de simulación. No existe una tabla separada de usuarios o cuentas en los archivos de salida: los atributos del usuario utilizados durante la generación se reflejan indirectamente mediante `id_cuenta_emisor`, `segmento_generador`, el dispositivo y las variables derivadas.
 
-| Nivel | Significado |
+
+### 2.2 Convenciones técnicas
+
+| Convención | Especificación |
 |---|---|
-| **Verificado** | Respaldado por una fuente pública oficial o de prensa citada en la sección 8. |
-| **Inferido** | Se deriva de un estándar público (ISO 20022, PY-QR), pero no se confirmó cómo lo registra cada banco. |
-| **Supuesto** | Decisión del equipo sin fuente pública. Es un parámetro declarado y ajustable. |
+| Codificación de salida | UTF-8 mediante `pandas.to_csv` |
+| Formato temporal | Serialización CSV de `datetime`; se recomienda interpretar como `datetime` sin zona horaria |
+| Coordenadas | WGS 84, latitud/longitud decimal en grados |
+| Campos binarios | `0` = no / normal; `1` = sí / condición presente |
+| Etiqueta objetivo | `es_fraude` |
+| Datos personales | No se generan datos personales reales; IDs, IPs, cuentas y ubicaciones son sintéticos |
 
-**Filtro de las tres preguntas** 
+### 2.3 Clasificación de uso
 
-1. **P1 · ¿Lo conoce el banco emisor en el instante *t*?** Si no, no puede ser característica.
-2. **P2 · ¿Se puede justificar que existe?** Con fuente pública o con un supuesto declarado.
-3. **P3 · ¿Se usará en el generador o como base de características?** Si no, sobra.
+Para evitar fuga de información, los campos se clasifican en cuatro grupos:
 
-## 3. Resumen de campos
+| Clasificación | Uso recomendado |
+|---|---|
+| Operativo | Identificación, trazabilidad, búsqueda o unión de registros; normalmente no como predictor directo. |
+| Predictor potencial | Puede utilizarse como entrada de reglas o modelos, sujeto a disponibilidad en tiempo real y gobierno de datos. |
+| Etiqueta/auditoría | Debe excluirse del entrenamiento predictivo; sirve para supervisión, evaluación y explicación de la simulación. |
+| Feature derivada | Variable calculada a partir de datos transaccionales y perfiles; apta para modelado si puede reproducirse en producción sin conocer la etiqueta. |
 
-| # | Campo | Tipo | Nulo | Ejemplo | Rol |
+## 3. Diseño de señales
+
+La selección de campos responde a cuatro dimensiones de riesgo:
+
+| Dimensión | Campos representativos | Razonamiento |
+|---|---|---|
+| Monetaria | `monto_pyg`, `zscore_monto_segmento`, `monto_fuera_rango_segmento` | Un monto atípico respecto al comportamiento esperado puede incrementar el riesgo. |
+| Temporal | `fecha_hora`, `hora_sin`, `hora_cos`, `hora_fuera_rango_segmento` | Los horarios inusuales son una señal contextual; no deben interpretarse de manera aislada. |
+| Identidad y dispositivo | `id_dispositivo_emisor`, `cambio_de_dispositivo`, `direccion_ip_emisor` | Un dispositivo novedoso o inconsistente puede indicar compromiso de cuenta; conviene combinarlo con otras señales. |
+| Geográfica y contraparte | `geo_latitud_emisor`, `geo_longitud_emisor`, `geo_fuera_zona_segmento`, receptor y entidad | Una ubicación atípica, junto con monto, tiempo, contraparte o dispositivo, aporta contexto para priorizar alertas. |
+
+En la práctica, el perfilado conductual se usa para mantener patrones de monto, horario y ubicación, mientras que los perfiles también pueden incorporar cuenta, dispositivo y eventos no monetarios. Las guías de inclusión financiera del FATF mencionan explícitamente el monitoreo de cambios de dispositivo y ubicación, además de perfiles de comportamiento, IP y geolocalización.
+
+## 4. Diccionario de datos: campos base
+
+Las siguientes columnas existen en `transferencias.csv` y también se conservan en `transferencias_modelo.csv`.
+
+| Campo | Tipo lógico | Dominio / formato | Nulo | Clasificación | Especificación y justificación |
 |---|---|---|---|---|---|
-| 1 | `id_transaccion` | VARCHAR | No | `TX000001` | Clave |
-| 2 | `timestamp` | DATETIME | No | `2026-09-01 14:32:18` | Base de características |
-| 3 | `id_cuenta_emisor` | VARCHAR | No | `CTA0001` | Clave de perfil |
-| 4 | `id_cuenta_receptor` | VARCHAR | No | `CTA0045` | Base de características |
-| 5 | `id_entidad_receptor` | VARCHAR | No | `ENT003` | Característica |
-| 6 | `monto` | INTEGER | No | `185000` | Característica |
-| 7 | `metodo_iniciacion` | VARCHAR | No | `MANUAL` | Característica |
-| 8 | `id_dispositivo_emisor` | VARCHAR | No | `DEV00125` | Base de características |
-| 9 | `direccion_ip_emisor` | VARCHAR | No | `10.24.7.33` | Opcional |
-| 10 | `geo_latitud_emisor` | DECIMAL(10,6) | Sí | `-25.282197` | Base de características |
-| 11 | `geo_longitud_emisor` | DECIMAL(10,6) | Sí | `-57.635098` | Base de características |
-| 12 | `es_fraude` | TINYINT (0/1) | No | `0` | Etiqueta (variable objetivo) |
+| `id_transaccion` | Texto | `TX` + 6 dígitos; ej. `TX000001` | No | Operativo | Identificador único de la transferencia generada. Permite trazabilidad, auditoría, deduplicación y vinculación con alertas o decisiones. No debe usarse como predictor: es un identificador artificial y puede inducir sobreajuste por orden de generación. |
+| `fecha_hora` | Fecha-hora | Fecha y hora entre el inicio y fin de los 30 días simulados | No | Predictor potencial | Marca temporal de la operación. Es la fuente para extraer hora del día, día de semana, antigüedad, velocidad y secuencias. El generador utiliza la hora para comparar cada operación con el rango activo del segmento. El perfilado de hábitos considera las horas y los días típicos de transacción.[web:9] |
+| `id_cuenta_emisor` | Texto | `CTA-EMI-` + 6 dígitos | No | Operativo / clave de agregación | Identificador sintético de la cuenta que inicia la transferencia. Es esencial para construir perfiles históricos, frecuencias, montos acumulados, dispositivos conocidos y reglas de velocidad. Debe tratarse como clave, no como variable categórica cruda de un modelo, salvo una codificación agregada entrenada correctamente. |
+| `id_cuenta_receptor` | Texto | `CTA-REC-` + 6 dígitos | No | Operativo / predictor potencial | Identificador de la cuenta beneficiaria. En sistemas reales permite analizar beneficiarios nuevos, recurrencia, concentración de receptores, redes y patrones de mulas. En este generador se asigna aleatoriamente; por ello, no contiene un comportamiento receptor persistente y su valor predictivo sintético es limitado. |
+| `id_entidad_receptor` | Texto | `ENTIDAD_01` a `ENTIDAD_06` | No | Predictor potencial | Identifica la entidad receptora sintética. Permite segmentar flujos por institución, analizar distribución de destinos y, en implementaciones reales, asociar señales de riesgo o patrones de contrapartes. Aquí se genera aleatoriamente, por lo que no se debe inferir riesgo real por entidad. |
+| `monto_pyg` | Entero | 1 a 10.000.000 | No | Predictor potencial | Importe de la transferencia en guaraníes. Es un atributo fundamental de monitoreo: el valor de una transacción permite comparar la operación actual con el perfil habitual y con límites o umbrales. El FATF señala que el monitoreo usa parámetros como el valor y la naturaleza de la transacción.[web:4] Se recomienda transformarlo para modelado, por ejemplo con `log1p`, percentiles por cuenta o z-scores históricos. |
+| `metodo_iniciacion` | Categórico | `MANUAL`, `ALIAS`, `QR` | No | Operativo / trazabilidad | Canal o mecanismo de inicio de la transferencia. Se conserva para trazabilidad y análisis descriptivo. El generador no crea una feature de “método inusual” y valida su ausencia; por tanto, no se debe atribuir riesgo intrínseco a un método solo por su categoría. En producción podría utilizarse con un historial suficiente y una evaluación de sesgo. |
+| `id_dispositivo_emisor` | Texto | `DISP-HAB-XXXXXX` o `DISP-XXXXXX` | No | Operativo / predictor potencial | Identificador sintético del dispositivo desde el que se origina la operación. Permite construir la noción de dispositivo conocido/nuevo. El reconocimiento de dispositivos y la detección de dispositivos sospechosos son componentes comunes de arquitecturas de fraude en tiempo real.[web:5] No se recomienda entrenar con el ID crudo; sí con features como primer uso, cantidad de cuentas por dispositivo o historial de confianza. |
+| `cambio_de_dispositivo` | Entero binario | `0`, `1` | No | Predictor potencial | Vale `1` si el dispositivo emisor difiere del dispositivo habitual del usuario. Es una señal directa de desviación de identidad y comportamiento. La guía del FATF contempla el monitoreo de cambios de dispositivo y ubicación dentro del monitoreo transaccional.[web:4] Debe usarse junto con contexto de geolocalización, autenticación y comportamiento, pues los cambios legítimos existen. |
+| `direccion_ip_emisor` | Texto | IPv4 sintética en prefijo `181.*.*.*` | No | Operativo / predictor potencial | Dirección IP sintética de origen. En implementaciones reales permite enriquecer con ASN, país, reputación, VPN/TOR, centro de datos y consistencia con la geolocalización. El propio FATF menciona IP y geolocalización como datos complementarios para decisiones de autorización y debida diligencia continua.[web:12] En este generador todas las IP siguen un patrón artificial; no debe usarse para extraer reputación real. |
+| `geo_latitud_emisor` | Decimal | Latitud WGS 84, 6 decimales | No | Predictor potencial | Coordenada de origen sintética. Se utiliza con longitud para medir distancia a las zonas habituales del segmento. La geolocalización puede enriquecer decisiones de autorización y monitoreo continuo cuando existe base legal, consentimiento y controles adecuados.[web:12] |
+| `geo_longitud_emisor` | Decimal | Longitud WGS 84, 6 decimales | No | Predictor potencial | Coordenada de origen sintética. Debe analizarse en conjunto con la latitud; por sí sola no tiene significado geográfico. En el generador, ambas coordenadas son usadas para calcular la distancia Haversine frente a las zonas habituales. |
+| `es_fraude` | Entero binario | `0`, `1` | No | Etiqueta | Variable objetivo: `1` identifica una transacción intervenida por uno de los escenarios de fraude y `0` una transacción no intervenida. Debe excluirse de las entradas de entrenamiento y utilizarse para supervisión, evaluación, matrices de confusión, precisión, recall, PR-AUC y otros indicadores. |
+| `segmento_generador` | Categórico | `S1_PERSONAL_COTIDIANO`, `S2_PERSONAL_MAYOR_MOVIMIENTO`, `S3_MICROEMPRENDEDOR`, `S4_PYME_PAGADORA` | No | Auditoría / posible fuga | Perfil interno usado para construir frecuencia, distribución de montos, horarios, zonas y método de iniciación. Es útil para explicar el generador y calcular features segmentales. No debe emplearse directamente como predictor en un escenario realista si el equivalente no existe en producción; hacerlo podría introducir información privilegiada. |
+| `escenario_fraude` | Categórico | `NINGUNO`, `F01_TOMA_CUENTA`, `F02_INGENIERIA_SOCIAL`, `F03_OPERACION_NOCTURNA`, `F04_ANOMALIA_COMBINADA` | No | Etiqueta / auditoría | Identifica el mecanismo de inyección aplicado a una operación etiquetada. Es útil para desagregar desempeño del modelo por tipología y verificar la coherencia de las señales. Debe excluirse de entrenamiento, ya que revela directamente la condición fraudulenta. |
+| `senales_f03_inyectadas` | Texto | Vacío o combinación de `monto`, `geo`, `dispositivo`, separada por `|` | No | Etiqueta / auditoría | Registra las señales adicionales aplicadas únicamente al escenario F03. Por ejemplo, `geo|monto`. Permite validar que F03 tenga exactamente una o dos señales extra. Es información del proceso de generación y produce fuga de información si se usa como predictor. |
 
-## 4. Detalle por campo
+## 5. Diccionario de datos: features derivadas
 
-### 4.1 `id_transaccion`
-- **Descripción:** identificador único de la transferencia.
-- **Formato:** `TX` + número correlativo de 6 dígitos (formato sintético).
-- **Respaldo: Inferido.** El SPI adopta mensajería ISO 20022, cuyos mensajes de pago llevan identificadores de mensaje, de instrucción y extremo a extremo. El formato `TX000001` es propio del dataset.
-- **Filtro:** P1 sí (se asigna al iniciar la transferencia) · P2 sí · P3 no como característica.
-- **Decisión:** **Incluir como clave.** Sirve para trazabilidad y no ingresará al modelo.
+Las siguientes columnas se agregan únicamente en `transferencias_modelo.csv`.
 
-### 4.2 `timestamp`
-- **Descripción:** fecha y hora en que se inicia la transferencia (hora local de Paraguay). Las fechas son **simuladas**.
-- **Respaldo: Inferido + Verificado.** La fecha y hora de creación es un elemento estándar del mensaje ISO 20022. El SPI opera las 24 horas, los 7 días de la semana, así que la distribución horaria del generador deberá cubrir todo el día y no solo el horario bancario.
-- **Filtro:** P1 sí · P2 sí · P3 sí.
-- **Justificación de inclusión:** es la base para cualquier característica temporal (hora del día, día de la semana, desvío respecto del horario habitual del cliente, ventanas de actividad reciente). La estacionalidad (fin de mes, aguinaldo) quedará como **supuesto** del equipo.
-
-### 4.3 `id_cuenta_emisor`
-- **Descripción:** identificador (seudonimizado) de la cuenta desde la cual se debita el dinero.
-- **Formato:** `CTA` + número. Simplificación: una cuenta corresponde a un cliente con un perfil de comportamiento.
-- **Respaldo: Inferido.** La cuenta del ordenante es un dato estándar de la transferencia.
-- **Filtro:** P1 sí · P2 sí · P3 sí (como clave de agregación histórica).
-- **Justificación de inclusión:** sin este identificador no se puede construir el historial ni el perfil del cliente (monto habitual, horario habitual, destinos y dispositivos conocidos), que es la base de casi todas las características del detector.
-
-### 4.4 `id_cuenta_receptor`
-- **Descripción:** identificador de la cuenta que recibe los fondos.
-- **Respaldo: Inferido + Verificado (alias).** Cuando el cliente usa un alias (CI, RUC, teléfono o correo), el sistema lo resuelve a los datos completos del destinatario. Por eso la tabla guarda la cuenta ya resuelta, sin importar cómo se ingresó.
-- **Filtro:** P1 sí · P2 sí · P3 sí.
-- **Justificación de inclusión:** permite detectar "destino nuevo para este cliente" y el patrón de muchos clientes transfiriendo al mismo destino en pocas horas (regla de cuenta mula, limitada a lo que ve este banco).
-
-### 4.5 `id_entidad_receptor`
-- **Descripción:** identificador del banco o entidad del beneficiario.
-- **Formato:** `ENT` + número (códigos sintéticos). Para mayor realismo se puede basar la lista en las entidades participantes del sistema que publica el BCP.
-- **Respaldo: Inferido.** La entidad del acreedor es un dato estándar de la transferencia, y el SPI conecta bancos, financieras y otras entidades.
-- **Filtro:** P1 sí · P2 sí · P3 sí.
-- **Justificación de inclusión:** permite distinguir transferencias a la misma entidad de las interbancarias. La proporción de transferencias por entidad es un **supuesto** declarado.
-
-### 4.6 `monto`
-- **Descripción:** importe de la transferencia en guaraníes (PYG), sin decimales.
-- **Restricciones:** entero positivo, `1 ≤ monto ≤ 10000000`. Se guarda sin separador de miles (`185000`). El punto es solo de visualización.
-- **Respaldo: Verificado.**
-  - El tope por operación SPI se elevó de Gs. 5.000.000 a Gs. 10.000.000 con la Resolución N° 2, Acta N° 12, del 12/03/2026. El tope de 10.000.000 se aplica a todo el período simulado, aunque en las fechas reales anteriores a marzo de 2026 el tope era de 5.000.000 (verificar la fecha exacta de entrada en vigencia).
-  - La guía PY-QR indica que las operaciones nacionales se realizan en guaraníes y que el importe no lleva decimales.
-- **Filtro:** P1 sí · P2 sí · P3 sí.
-- **Justificación de inclusión:** el monto relativo al perfil del cliente y la cercanía al tope son señales centrales del escenario de fraccionamiento.
-
-### 4.7 `metodo_iniciacion`
-- **Descripción:** forma en que el usuario inicia la operación.
-- **Valores:**
-  - `MANUAL`: el usuario ingresa los datos del destino (número de cuenta o alias).
-  - `QR`: el usuario escanea un código QR (QR Sip / QR Hub).
-- **Respaldo: Parcialmente verificado, parcialmente supuesto.**
-  - *Verificado:* el QR Hub es un módulo integrado al SPI [3]. El pago con QR se ejecuta como transferencia directa entre la cuenta del pagador y la del comercio o beneficiario. El BCP reconoce públicamente distintas modalidades de iniciación y creó la marca SIP por esa razón. Su FAQ menciona la lectura de QR como una vía para iniciar pagos. Desde julio de 2026 algunos bancos permiten a sus clientes generar su propio QR para cobrar, por lo que el beneficiario no es necesariamente un comercio.
-  - *Supuesto:* que el banco guarde este dato en el registro de la transacción y lo entregue al motor antifraude. No se encontró documentación pública que lo confirme.
-- **Filtro:** P1 sí (bajo el supuesto declarado) · P2 sí (supuesto declarado) · P3 sí.
-- **Justificación de inclusión:** cambia la interpretación de otras variables. Los pagos QR legítimos van con frecuencia a destinos nuevos y con montos distintos a los de una transferencia manual. Sin esta variable, el modelo trataría "destino nuevo" como riesgo en todos los casos. Los parámetros de comportamiento por método son **supuestos** del equipo.
-- **Decisiones de diseño:** no se distinguen subtipos (QR estático/dinámico, alias/cuenta) porque no hay evidencia pública de que se registren. Alcance: solo QR dentro del SPI; los pagos QR anteriores vía procesadoras de tarjetas quedan fuera.
-
-### 4.8 `id_dispositivo_emisor`
-- **Descripción:** identificador del dispositivo desde el cual se inicia la operación.
-- **Formato:** `DEV` + número (sintético).
-- **Respaldo: Supuesto.** Es un dato interno del banco emisor y no forma parte de los mensajes públicos del SPI. No se identificó una fuente pública paraguaya que confirme qué captura cada banco.
-- **Filtro:** P1 sí (bajo el supuesto declarado) · P2 sí (supuesto declarado) · P3 sí.
-- **Justificación de inclusión:** "dispositivo nuevo para este cliente" es la señal central del escenario de toma de cuenta. El generador deberá modelar también el ruido legítimo: clientes que cambian de celular con baja frecuencia (parámetro ajustable, sección 6).
-
-### 4.9 `direccion_ip_emisor`
-- **Descripción:** dirección IP registrada para el origen de la operación.
-- **Formato:** direcciones ficticias (por ejemplo, del rango privado `10.0.0.0/8`) para no exponer IP reales. Cada cliente tendrá un conjunto de IP habituales (hogar, datos móviles).
-- **Respaldo: Supuesto.** Dato interno del banco, sin fuente pública.
-- **Filtro:** P1 sí (bajo el supuesto declarado) · P2 sí (supuesto declarado) · P3 sí, como base de una característica derivada; la IP cruda no ingresará al modelo.
-- **Limitación:** la característica derivada ("IP no vista antes para este cliente") es **ruidosa**, porque las IP móviles cambian seguido. La ciudad de la IP no se incluye (ver sección 5).
-
-### 4.10 `geo_latitud_emisor` / 4.11 `geo_longitud_emisor`
-- **Descripción:** coordenadas capturadas por la app al iniciar la operación, si el usuario otorgó el permiso.
-- **Tipo:** DECIMAL(10,6), **admite nulos**.
-- **Rango esperado:** territorio paraguayo (aprox. latitud entre -27,6 y -19,3; longitud entre -62,6 y -54,3).
-- **Respaldo: Supuesto.** Dato interno de la app, sin fuente pública. El porcentaje de nulos es un parámetro ajustable del generador (por ejemplo, 20-30 %).
-- **Filtro:** P1 sí (bajo el supuesto declarado) · P2 sí (supuesto declarado) · P3 sí.
-- **Justificación de inclusión:** permite medir la distancia respecto de la ubicación habitual del cliente y detectar operaciones desde ubicaciones improbables. Que el campo admita nulos refleja que el permiso de ubicación puede no estar otorgado; el tratamiento de esos nulos se definirá con las características derivadas.
-- **Nota de privacidad:** con datos reales, la ubicación es dato personal. Aquí las coordenadas son sintéticas.
-
-### 4.12 `es_fraude`
-- **Descripción:** etiqueta binaria (1 = fraude, 0 = legítima).
-- **Origen:** la asignará el generador según el escenario que produjo la transacción. No saldrá de un umbral sobre las demás columnas.
-- **Respaldo: Supuesto.** Los escenarios y sus probabilidades son reglas de negocio del equipo. La tasa objetivo (< 0,1 %) proviene del enunciado del proyecto.
-- **Filtro:** no aplica (es la variable objetivo; nunca es característica).
-- **Justificación de inclusión:** sin etiqueta no hay aprendizaje supervisado ni evaluación posible. En un despliegue real este campo no existiría: es justamente lo que el modelo predice.
-
-## 5. Campos considerados y descartados
-
-Los siguientes campos se evaluaron con el filtro de las tres preguntas y se descartaron. Se documentan para dejar constancia de la decisión.
-
-| Campo descartado | Motivo |
-|---|---|
-| Ciudad/país de la IP | La geolocalización por IP es imprecisa y ruidosa; se usa la ubicación de la app (4.10-4.11) cuando esté disponible. |
-| Subtipo de QR (estático/dinámico) | Sin evidencia pública de que los bancos lo registren; falla P1/P2. |
-| Tipo de alias (CI/RUC/teléfono/correo) | El alias se resuelve antes de la evaluación; el subtipo no aporta a las reglas del generador; falla P3. |
-| Tipo de cuenta (ahorro/corriente) | Sin fuente pública sobre su disponibilidad en el mensaje (falla P2) y no se usó en reglas (falla P3). |
-| Canal NFC / otras modalidades | Anunciado para inicios de 2027, fuera del período simulado. |
-| Datos del beneficiario (nombre, etc.) | Dato personal no necesario; el modelo trabaja con identificadores seudonimizados. |
-| Comportamiento de otros bancos | Contradice la perspectiva de banco emisor único; el motor no lo observa en *t*; falla P1. |
+| Campo | Tipo lógico | Dominio / fórmula | Nulo | Clasificación | Especificación y justificación |
+|---|---|---|---|---|---|
+| `zscore_monto_segmento` | Decimal | `(monto_pyg - media_segmento) / desviacion_segmento` | No | Feature derivada | Mide cuántas desviaciones estándar se aleja el monto de la media del segmento generador. Permite normalizar importes entre perfiles con escalas muy distintas. Es una forma sintética de representar el principio de comparación contra una línea base de comportamiento. Para uso real, conviene calcularlo contra un baseline histórico por cliente/cuenta, idealmente con estadísticas robustas y ventanas temporales. |
+| `monto_fuera_rango_segmento` | Entero binario | `1` si el monto es menor al mínimo o mayor al máximo normal del segmento; de lo contrario `0` | No | Feature derivada | Representa una regla de fuera de perfil monetario. Facilita modelos basados en reglas y aporta interpretabilidad: indica que el importe excede los límites normales definidos para ese segmento. Debe calibrarse en producción con perfiles empíricos y no con rangos fijos artificiales. |
+| `hora_sin` | Decimal | `sin(2π × hora / 24)` | No | Feature derivada | Codificación cíclica de la hora. Evita que un modelo interprete 23:00 y 00:00 como horas muy distantes cuando son contiguas en el ciclo diario. Es útil en modelos numéricos que no procesan directamente la naturaleza circular del tiempo. |
+| `hora_cos` | Decimal | `cos(2π × hora / 24)` | No | Feature derivada | Complementa `hora_sin` para ubicar de manera única cada hora dentro del ciclo de 24 horas. Debe utilizarse junto con `hora_sin`, no de manera aislada. |
+| `hora_fuera_rango_segmento` | Entero binario | `1` si la hora está fuera del rango activo del segmento; de lo contrario `0` | No | Feature derivada | Señala una desviación temporal contra el perfil esperado. Los patrones de horario forman parte de los perfiles conductuales de fraude.[web:9] No equivale por sí sola a fraude: el generador preserva un 2 % de operaciones legítimas fuera de horario precisamente para introducir solapamiento realista. |
+| `geo_fuera_zona_segmento` | Entero binario | `1` si la distancia mínima a una zona habitual supera el radio permitido del segmento; de lo contrario `0` | No | Feature derivada | Resume la desviación geográfica calculada con Haversine. La ubicación es una señal contextual que puede apoyar análisis de consistencia, anomalías y detección de desplazamientos improbables. Las arquitecturas de fraude suelen combinar geolocalización, dispositivos y patrones de comportamiento en lugar de depender de una sola señal.[web:5][web:9] |
 
 
-## 6. Especificaciones
+## 8. Consideraciones de privacidad y gobierno
+
+Aunque el dataset es sintético, el esquema contiene tipos de datos que, en un ambiente real, son sensibles o potencialmente personales: identificadores de cuenta, dispositivo, dirección IP y coordenadas de ubicación.
+
+Para una implementación real se recomienda:
+
+- Aplicar minimización de datos: recolectar solo lo necesario para una finalidad legítima de prevención de fraude.
+- Pseudonimizar identificadores de cuenta, dispositivo e IP antes de usos analíticos que no requieran el valor original.
+- Definir retención, control de acceso, auditoría de consultas y separación de entornos.
+- Evaluar la base legal, transparencia y consentimiento aplicables para datos de ubicación.
+- Validar calidad, precisión y resistencia a manipulación de señales como IP o geolocalización.
+
+
+
+## 9. Especificaciones
 
 - Los datos serán sintéticos. La importancia que el modelo asigne a una variable dependerá de los supuestos del generador y no constituirá evidencia sobre fraude real.
 - No se encontró un manual técnico público del SPI con la lista exacta de campos del mensaje. La correspondencia con los campos ISO 20022 es una **inferencia** a partir del estándar.
-- La FAQ del BCP indica que los pagos con QR "actuales" (vía procesadoras) se hacen fuera del SPI.
-- Los campos internos del banco (dispositivo, IP, ubicación) son supuestos declarados.
-- Régimen simulado: el período aplica el régimen actual a todas las fechas. En la realidad, el QR Hub estaba en producción controlada a fines de junio de 2026, los bancos habilitaron el QR personal en julio de 2026 y el tope de 10 millones rige desde marzo de 2026.
-- Este documento solo define y justifica la tabla base. Las características derivadas, los escenarios de fraude y la segmentación de clientes se documentarán en archivos separados.
+- Los campos internos del banco (dispositivo, IP, coordenadas) son supuestos declarados.
 
 
-## 7. Fuentes
+
+## 11. Fuentes
 
 | Ref. | Fuente | Se usó para |
 |---|---|---|
