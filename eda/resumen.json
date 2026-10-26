@@ -1,0 +1,15 @@
+{
+  "archivo": "data\\dataset_completo.csv",
+  "filas": 1000000,
+  "columnas": 21,
+  "etiquetas_validas": 1000000,
+  "etiquetas_invalidas_o_nulas": 0,
+  "fraudes": 1000,
+  "tasa_fraude_pct": 0.1,
+  "fecha_min": "2026-01-01 00:19:49",
+  "fecha_max": "2026-03-31 23:59:45",
+  "timestamps_validos_ordenados": true,
+  "normales_en_dispersion": 20000,
+  "fraudes_en_dispersion": 1000,
+  "reglas_con_incidencias": 3
+}

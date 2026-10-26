@@ -1,384 +1,462 @@
-#!/usr/bin/env python3
 """
-EDA y chequeo de calidad del dataset de transacciones (detección de fraude).
-
-Lee  ./transacciones_completo.csv  (carpeta raíz) y genera en ./eda_output/:
-  - reporte_calidad.txt        (chequeos de calidad, balance, outliers, poder discriminante)
-  - 01..10_*.png               (gráficos de distribución)
-
-Uso:
-    pip install pandas numpy matplotlib
-    python eda.py
-    python eda.py --input otra_ruta.csv --out carpeta_salida
+================================================================================
+ANÁLISIS EXPLORATORIO DE DATOS (EDA) - DETECTOR DE FRAUDE SPI
+================================================================================
+Uso: python eda.py
+Entrada: dataset_completo.csv
+Salida: Gráficos en pantalla + carpeta 'eda_outputs/' con los PNG
+================================================================================
 """
-import argparse
-import os
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import warnings
+warnings.filterwarnings('ignore')
 
-C_LEGIT, C_FRAUD = "#2a7ab9", "#d62728"
-ESCENARIOS = ["ninguno", "toma_cuenta", "vaciado_fraccionado", "ingenieria_social"]
+# ==============================================================================
+# CONFIGURACIÓN
+# ==============================================================================
+sns.set_theme(style="whitegrid", palette="deep")
+plt.rcParams['figure.figsize'] = (14, 8)
+plt.rcParams['font.size'] = 10
 
-CONTINUAS = ["monto_pyg", "monto_promedio_usuario_30d", "ratio_monto_vs_promedio",
-             "amount_sum_1h", "amount_sum_24h", "tx_count_1h", "tx_count_24h",
-             "distancia_zona_habitual_km", "antiguedad_cuenta_dias"]
-LOG_SCALE = {"monto_pyg", "monto_promedio_usuario_30d", "ratio_monto_vs_promedio",
-             "amount_sum_1h", "amount_sum_24h", "tx_count_1h", "tx_count_24h",
-             "distancia_zona_habitual_km"}
-BINARIAS = ["es_fin_de_semana", "es_horario_nocturno", "hora_atipica",
-            "dispositivo_nuevo", "ip_nueva", "is_new_beneficiary"]
-FEATURES = ["hora_sin", "hora_cos"] + BINARIAS + CONTINUAS
+OUTPUT_DIR = Path('eda_outputs')
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False,
-                     "axes.spines.right": False, "axes.grid": True,
-                     "grid.alpha": 0.25, "font.size": 9})
+# ==============================================================================
+# 1. CARGA Y VALIDACIÓN BÁSICA
+# ==============================================================================
+print("="*70)
+print(" CARGANDO DATASET")
+print("="*70)
 
+df = pd.read_csv('data/dataset_completo.csv')
 
-# --------------------------------------------------------------------------- #
-# Utilidades
-# --------------------------------------------------------------------------- #
-def guardar(fig, out, nombre):
-    ruta = os.path.join(out, nombre)
-    fig.tight_layout()
-    fig.savefig(ruta, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  -> {ruta}")
+print(f"Filas:          {len(df):,}")
+print(f"Columnas:       {len(df.columns)}")
+print(f"Memoria:        {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+print(f"\nColumnas:       {list(df.columns)}")
 
+# Separar features y etiquetas
+label_cols = ['es_fraude', 'escenario_fraude']
+feature_cols = [c for c in df.columns if c not in label_cols]
 
-def transformar(serie, nombre):
-    return np.log1p(serie) if nombre in LOG_SCALE else serie
+# ==============================================================================
+# 2. RESUMEN DE CALIDAD
+# ==============================================================================
+print("\n" + "="*70)
+print(" RESUMEN DE CALIDAD")
+print("="*70)
 
+# Nulos
+nulos = df.isnull().sum()
+if nulos.sum() == 0:
+    print("✅ Sin valores nulos")
+else:
+    print(f"⚠️ Columnas con nulos:\n{nulos[nulos > 0]}")
 
-def auc_univariante(x, y):
-    """AUC de una variable sola vs. la etiqueta (vía rangos, sin scipy)."""
-    m = x.notna()
-    x, y = x[m], y[m]
-    n1, n0 = int(y.sum()), int((1 - y).sum())
-    if n1 == 0 or n0 == 0:
-        return np.nan
-    r = x.rank(method="average")
-    return (r[y == 1].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)
+# Duplicados
+dup = df.duplicated().sum()
+print(f"{'✅' if dup == 0 else '⚠️'} Duplicados: {dup}")
 
+# Tipos de datos
+print(f"\nTipos de datos:")
+print(df.dtypes.value_counts().to_string())
 
-# --------------------------------------------------------------------------- #
-# Reporte de calidad (texto)
-# --------------------------------------------------------------------------- #
-def reporte_calidad(df, out):
-    lineas = []
+# Desbalance
+n_fraudes = int(df['es_fraude'].sum())
+pct_fraude = df['es_fraude'].mean() * 100
+print(f"\n{'='*70}")
+print(f" DESBALANCE DE CLASES")
+print(f"{'='*70}")
+print(f"Normales:  {len(df) - n_fraudes:>9,} ({100 - pct_fraude:.3f}%)")
+print(f"Fraudes:   {n_fraudes:>9,} ({pct_fraude:.3f}%)")
+print(f"Ratio de desbalance (neg/pos): {(len(df) - n_fraudes) / max(n_fraudes, 1):.0f}:1")
 
-    def p(s=""):
-        print(s)
-        lineas.append(s)
+# ==============================================================================
+# 3. GRÁFICO 1: DISTRIBUCIÓN DE CLASES Y ESCENARIOS
+# ==============================================================================
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    def chequeo(nombre, n_malos):
-        p(f"  [{'OK ' if n_malos == 0 else 'FALLA'}] {nombre}: {n_malos:,} filas")
+# 3.1 Conteo de clases
+ax = axes[0]
+counts = df['es_fraude'].value_counts().sort_index()
+bars = ax.bar(['Normal', 'Fraude'], counts.values, color=['#2ecc71', '#e74c3c'], edgecolor='black')
+for bar, val in zip(bars, counts.values):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() * 1.02,
+            f'{val:,}', ha='center', va='bottom', fontweight='bold')
+ax.set_title('Distribución de Clases (conteo)', fontweight='bold')
+ax.set_ylabel('N° transacciones')
+ax.set_yscale('log')
 
-    n, y = len(df), df["es_fraude"]
-    p("=" * 70)
-    p("REPORTE DE CALIDAD DEL DATASET")
-    p("=" * 70)
-    p(f"Filas: {n:,} | Columnas: {df.shape[1]}")
-    p(f"Período: {df['fecha_hora'].min()}  ->  {df['fecha_hora'].max()}")
-    p(f"Cuentas emisoras únicas: {df['id_cuenta_emisor'].nunique():,} | "
-      f"dispositivos: {df['id_dispositivo_emisor'].nunique():,} | "
-      f"IPs: {df['direccion_ip_emisor'].nunique():,}")
+# 3.2 Proporción de clases (pie)
+ax = axes[1]
+ax.pie(counts.values, labels=['Normal', 'Fraude'], autopct='%.3f%%',
+       colors=['#2ecc71', '#e74c3c'], startangle=90, explode=(0, 0.15),
+       textprops={'fontweight': 'bold'})
+ax.set_title('Proporción de Clases', fontweight='bold')
 
-    p("\n1) BALANCE DE CLASES")
-    n_f = int(y.sum())
-    p(f"  Legítimas: {n - n_f:,} | Fraudes: {n_f:,} ({y.mean():.4%}) "
-      f"| ratio ~ 1:{(n - n_f) / max(n_f, 1):,.0f}")
-    if n_f < 100:
-        p("  [ADVERTENCIA] Pocos fraudes (<100): las métricas serán muy ruidosas.")
-    if "escenario_fraude" in df:
-        p("  Fraude por escenario:")
-        for esc, cnt in df.loc[y == 1, "escenario_fraude"].value_counts().items():
-            p(f"    - {esc}: {cnt:,} ({cnt / max(n_f, 1):.1%})")
+# 3.3 Escenarios de fraude
+ax = axes[2]
+esc_counts = df[df['es_fraude'] == 1]['escenario_fraude'].value_counts()
+bars = ax.barh(esc_counts.index, esc_counts.values, color='#e74c3c', edgecolor='black')
+for bar, val in zip(bars, esc_counts.values):
+    ax.text(bar.get_width() * 1.02, bar.get_y() + bar.get_height()/2,
+            f'{val:,}', va='center', fontweight='bold')
+ax.set_title('Escenarios de Fraude (conteo)', fontweight='bold')
+ax.set_xlabel('N° casos')
 
-    p("\n2) VALORES NULOS")
-    nulos = df.isna().sum()
-    nulos = nulos[nulos > 0]
-    if nulos.empty:
-        p("  Sin nulos.")
-    for col, cnt in nulos.items():
-        p(f"  {col}: {cnt:,} ({cnt / n:.2%})  "
-          "(esperable si es historial insuficiente; XGBoost los maneja)")
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '01_distribucion_clases.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-    p("\n3) DUPLICADOS")
-    chequeo("id_transaccion repetido", int(df["id_transaccion"].duplicated().sum()))
-    chequeo("filas idénticas (sin contar el id)",
-            int(df.drop(columns="id_transaccion").duplicated().sum()))
+# ==============================================================================
+# 4. GRÁFICO 2: MATRIZ DE CORRELACIÓN (solo features numéricas)
+# ==============================================================================
+fig, ax = plt.subplots(figsize=(16, 12))
 
-    p("\n4) CONSISTENCIA Y RANGOS")
-    chequeo("monto_pyg <= 0", int((df["monto_pyg"] <= 0).sum()))
-    chequeo("coordenadas fuera de Paraguay (aprox.)", int(
-        (~df["geo_latitud_emisor"].between(-28, -19)
-         | ~df["geo_longitud_emisor"].between(-63, -54)).sum()))
-    chequeo("emisor == receptor",
-            int((df["id_cuenta_emisor"] == df["id_cuenta_receptor"]).sum()))
-    chequeo("tx_count_1h > tx_count_24h", int((df["tx_count_1h"] > df["tx_count_24h"]).sum()))
-    chequeo("amount_sum_1h > amount_sum_24h",
-            int((df["amount_sum_1h"] > df["amount_sum_24h"] + 1).sum()))
-    chequeo("antiguedad_cuenta_dias < 0", int((df["antiguedad_cuenta_dias"] < 0).sum()))
-    chequeo("hora_sin^2 + hora_cos^2 != 1", int(
-        ((df["hora_sin"] ** 2 + df["hora_cos"] ** 2 - 1).abs() > 1e-3).sum()))
-    chequeo("flags binarios fuera de {0,1}", int(
-        sum((~df[b].isin([0, 1])).sum() for b in BINARIAS)))
-    chequeo("fecha_hora fuera de orden cronológico",
-            int((df["fecha_hora"].diff().dt.total_seconds() < 0).sum()))
+corr = df[feature_cols + ['es_fraude']].corr()
 
-    p("\n5) COLUMNAS CONSTANTES (no aportan información)")
-    ctes = [c for c in FEATURES if df[c].nunique(dropna=True) <= 1]
-    p("  " + (", ".join(ctes) if ctes else "Ninguna."))
+# Máscara triangular
+mask = np.triu(np.ones_like(corr, dtype=bool))
 
-    p("\n6) OUTLIERS Y ASIMETRÍA (regla IQR x3)")
-    p(f"  {'variable':32s} {'%outliers':>10s} {'asimetría':>10s} {'mediana':>14s} {'máximo':>16s}")
-    for c in CONTINUAS:
-        s = df[c].dropna()
-        q1, q3 = s.quantile(.25), s.quantile(.75)
-        iqr = q3 - q1
-        out_pct = ((s < q1 - 3 * iqr) | (s > q3 + 3 * iqr)).mean() * 100
-        p(f"  {c:32s} {out_pct:9.2f}% {s.skew():10.2f} {s.median():14,.2f} {s.max():16,.2f}")
+sns.heatmap(corr, mask=mask, cmap='RdBu_r', center=0, annot=True,
+            fmt='.2f', linewidths=0.5, ax=ax,
+            cbar_kws={'label': 'Correlación de Pearson'},
+            annot_kws={'size': 7})
 
-    p("\n7) PODER DISCRIMINANTE UNIVARIANTE (AUC; 0.5 = sin señal)")
-    p("   Un AUC > 0.98 con una sola variable sugiere fuga de información (leakage).")
-    aucs = {c: auc_univariante(df[c], y) for c in FEATURES}
-    for c, a in sorted(aucs.items(), key=lambda kv: -abs(kv[1] - 0.5) if kv[1] == kv[1] else 0):
-        marca = "  <-- revisar posible leakage" if a > 0.98 or a < 0.02 else ""
-        p(f"  {c:32s} AUC = {a:.3f}{marca}")
+ax.set_title('Matriz de Correlación (features + etiqueta)',
+             fontweight='bold', fontsize=14, pad=20)
 
-    p("\n8) FEATURES: MEDIA LEGÍTIMA vs. FRAUDE")
-    p(f"  {'variable':32s} {'legítima':>14s} {'fraude':>14s}")
-    for c in FEATURES:
-        p(f"  {c:32s} {df.loc[y == 0, c].mean():14,.3f} {df.loc[y == 1, c].mean():14,.3f}")
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '02_matriz_correlacion.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-    with open(os.path.join(out, "reporte_calidad.txt"), "w", encoding="utf-8") as f:
-        f.write("\n".join(lineas))
-    return aucs
+# Correlaciones más fuertes con es_fraude
+print("\n" + "="*70)
+print(" TOP 10 CORRELACIONES CON es_fraude")
+print("="*70)
+top_corr = corr['es_fraude'].drop('es_fraude').abs().sort_values(ascending=False).head(10)
+for feat, val in top_corr.items():
+    print(f"  {feat:35} {corr.loc[feat, 'es_fraude']:+.4f}")
 
+# ==============================================================================
+# 5. GRÁFICO 3: BOXPLOTS / VIOLIN PLOTS DE FEATURES CLAVE POR CLASE
+# ==============================================================================
+key_features = [
+    'monto_pyg', 'ratio_monto_vs_promedio', 'tx_count_1h',
+    'tx_count_24h', 'amount_sum_1h', 'unique_beneficiaries_24h'
+]
 
-# --------------------------------------------------------------------------- #
-# Gráficos
-# --------------------------------------------------------------------------- #
-def g_balance(df, out):
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    conteo = df["es_fraude"].value_counts().sort_index()
-    vals = [conteo.get(0, 0), conteo.get(1, 0)]
-    barras = ax[0].bar(["Legítima", "Fraude"], vals, color=[C_LEGIT, C_FRAUD])
-    ax[0].set_yscale("log")
-    ax[0].set_title("Balance de clases (escala log)")
-    for b, v in zip(barras, vals):
-        ax[0].text(b.get_x() + b.get_width() / 2, v, f"{v:,}\n({v / len(df):.3%})",
-                   ha="center", va="bottom")
-    if "escenario_fraude" in df:
-        esc = df.loc[df.es_fraude == 1, "escenario_fraude"].value_counts()
-        ax[1].barh(esc.index[::-1], esc.values[::-1], color=C_FRAUD)
-        ax[1].set_title("Transacciones fraudulentas por escenario")
-        for i, v in enumerate(esc.values[::-1]):
-            ax[1].text(v, i, f" {v:,}", va="center")
-    guardar(fig, out, "01_balance_clases.png")
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+axes = axes.flatten()
 
+for i, feat in enumerate(key_features):
+    ax = axes[i]
+    # Usar log1p para features con rango muy amplio
+    if feat in ['monto_pyg', 'amount_sum_1h', 'ratio_monto_vs_promedio']:
+        data = df[[feat, 'es_fraude']].copy()
+        data[feat] = np.log1p(data[feat])
+        ylabel = f'log1p({feat})'
+    else:
+        data = df[[feat, 'es_fraude']]
+        ylabel = feat
 
-def g_serie_temporal(df, out):
-    d = df.set_index("fecha_hora")
-    fig, ax = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
-    d["es_fraude"].resample("D").count().plot(ax=ax[0], color=C_LEGIT)
-    ax[0].set_title("Transacciones por día")
-    ax[0].set_xlabel("")
-    d["es_fraude"].resample("D").sum().plot(ax=ax[1], color=C_FRAUD)
-    ax[1].set_title("Fraudes por día")
-    ax[1].set_xlabel("")
-    guardar(fig, out, "02_serie_temporal.png")
+    sns.boxplot(data=data, x='es_fraude', y=feat,
+                palette=['#2ecc71', '#e74c3c'], ax=ax,
+                showfliers=False, width=0.6)
+    ax.set_title(f'{feat}\n(fraudes en rojo)', fontweight='bold')
+    ax.set_xlabel('es_fraude (0=Normal, 1=Fraude)')
+    ax.set_ylabel(ylabel)
 
+plt.suptitle('Distribución de Features Clave por Clase', fontsize=15, fontweight='bold', y=1.02)
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '03_boxplots_features.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-def g_horaria(df, out):
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    hora = df["fecha_hora"].dt.hour
-    dow = df["fecha_hora"].dt.dayofweek
-    for a, serie, rango, etiquetas, titulo in (
-            (ax[0], hora, range(24), range(24), "Hora del día"),
-            (ax[1], dow, range(7), ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
-             "Día de la semana")):
-        for clase, color, nombre in ((0, C_LEGIT, "Legítima"), (1, C_FRAUD, "Fraude")):
-            frec = serie[df.es_fraude == clase].value_counts(normalize=True).reindex(rango, fill_value=0)
-            a.plot(list(rango), frec.values, marker="o", ms=3, color=color, label=nombre)
-        a.set_xticks(list(rango))
-        a.set_xticklabels(list(etiquetas))
-        a.set_title(titulo + " (proporción dentro de cada clase)")
-        a.legend()
-    guardar(fig, out, "03_distribucion_horaria.png")
+# ==============================================================================
+# 6. GRÁFICO 4: SCATTER PLOTS (los "de puntos" que pediste)
+# ==============================================================================
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
+# 6.1 Monto vs Ratio (la separación más importante)
+ax = axes[0, 0]
+normal = df[df['es_fraude'] == 0].sample(min(5000, len(df[df['es_fraude']==0])), random_state=42)
+fraude = df[df['es_fraude'] == 1]
+ax.scatter(np.log1p(normal['monto_pyg']), np.log1p(normal['ratio_monto_vs_promedio']),
+           alpha=0.15, s=8, c='#2ecc71', label='Normal', edgecolors='none')
+ax.scatter(np.log1p(fraude['monto_pyg']), np.log1p(fraude['ratio_monto_vs_promedio']),
+           alpha=0.6, s=20, c='#e74c3c', label='Fraude', edgecolors='black', linewidth=0.3)
+ax.set_xlabel('log1p(monto_pyg)')
+ax.set_ylabel('log1p(ratio_monto_vs_promedio)')
+ax.set_title('Monto vs Ratio (separación de clases)', fontweight='bold')
+ax.legend(markerscale=3)
 
-def g_histogramas(df, out):
-    cols = [c for c in CONTINUAS if c in df]
-    discretas = {"tx_count_1h", "tx_count_24h"}
-    nc = 3
-    nr = int(np.ceil(len(cols) / nc))
-    fig, axes = plt.subplots(nr, nc, figsize=(13, 3.2 * nr))
-    for a, c in zip(axes.ravel(), cols):
-        disc = c in discretas
-        f = (lambda s: s) if disc else (lambda s, c=c: transformar(s, c))
-        x = f(df[c]).dropna()
-        fr = f(df.loc[df.es_fraude == 1, c]).dropna()
-        lo = x.min()
-        hi = x.quantile(0.995)
-        if len(fr):
-            hi = max(hi, fr.quantile(0.99))   # no recortar la cola donde está el fraude
-        hi = hi if hi > lo else lo + 1
-        bins = np.arange(lo - 0.5, hi + 1.5) if disc else np.linspace(lo, hi, 40)
-        for clase, color, nombre in ((0, C_LEGIT, "Legítima"), (1, C_FRAUD, "Fraude")):
-            v = f(df.loc[df.es_fraude == clase, c]).dropna()
-            v = v[v <= hi]
-            if len(v) > 1:
-                a.hist(v, bins=bins, density=True, alpha=0.5, color=color, label=nombre)
-        if disc:
-            a.set_yscale("log")
-        a.set_title(c + (" (log1p)" if (c in LOG_SCALE and not disc) else "")
-                    + (" (eje y log)" if disc else ""))
-        a.legend(fontsize=7)
-    for a in axes.ravel()[len(cols):]:
-        a.axis("off")
-    fig.suptitle("Distribución de variables continuas por clase (densidad; se omite solo la cola extrema)",
-                 y=1.01)
-    guardar(fig, out, "04_histogramas_continuas.png")
+# 6.2 Tx count 1h vs Amount sum 1h
+ax = axes[0, 1]
+ax.scatter(normal['tx_count_1h'], np.log1p(normal['amount_sum_1h']),
+           alpha=0.15, s=8, c='#2ecc71', label='Normal', edgecolors='none')
+ax.scatter(fraude['tx_count_1h'], np.log1p(fraude['amount_sum_1h']),
+           alpha=0.6, s=20, c='#e74c3c', label='Fraude', edgecolors='black', linewidth=0.3)
+ax.set_xlabel('tx_count_1h')
+ax.set_ylabel('log1p(amount_sum_1h)')
+ax.set_title('Velocidad vs Monto acumulado 1h', fontweight='bold')
+ax.legend(markerscale=3)
+ax.set_xlim(0, 25)
 
+# 6.3 Hora del día vs Ratio
+ax = axes[1, 0]
+ax.scatter(normal['hora'], np.log1p(normal['ratio_monto_vs_promedio']),
+           alpha=0.1, s=6, c='#2ecc71', label='Normal', edgecolors='none')
+ax.scatter(fraude['hora'], np.log1p(fraude['ratio_monto_vs_promedio']),
+           alpha=0.5, s=18, c='#e74c3c', label='Fraude', edgecolors='black', linewidth=0.3)
+ax.set_xlabel('Hora del día')
+ax.set_ylabel('log1p(ratio_monto_vs_promedio)')
+ax.set_title('Hora vs Ratio', fontweight='bold')
+ax.legend(markerscale=3)
+ax.set_xticks(range(0, 24, 3))
 
-def g_binarias(df, out):
-    cols = [c for c in BINARIAS if c in df]
-    fig, ax = plt.subplots(figsize=(11, 4.5))
-    x = np.arange(len(cols))
-    w = 0.38
-    r0 = [df.loc[df[c] == 0, "es_fraude"].mean() * 100 for c in cols]
-    r1 = [df.loc[df[c] == 1, "es_fraude"].mean() * 100 for c in cols]
-    b0 = ax.bar(x - w / 2, r0, w, color=C_LEGIT, label="valor = 0")
-    b1 = ax.bar(x + w / 2, r1, w, color=C_FRAUD, label="valor = 1")
-    for barras in (b0, b1):
-        for b in barras:
-            ax.text(b.get_x() + b.get_width() / 2, b.get_height(), f"{b.get_height():.2f}%",
-                    ha="center", va="bottom", fontsize=7)
-    ax.axhline(df.es_fraude.mean() * 100, color="gray", ls="--", lw=1, label="tasa global")
-    ax.set_xticks(x)
-    ax.set_xticklabels(cols, rotation=20, ha="right")
-    ax.set_ylabel("% de fraude")
-    ax.set_title("Tasa de fraude según el valor de cada variable binaria")
-    ax.legend()
-    guardar(fig, out, "05_tasa_fraude_binarias.png")
+# 6.4 Antigüedad de cuenta vs Monto
+ax = axes[1, 1]
+ax.scatter(normal['antiguedad_cuenta_dias'], np.log1p(normal['monto_pyg']),
+           alpha=0.1, s=6, c='#2ecc71', label='Normal', edgecolors='none')
+ax.scatter(fraude['antiguedad_cuenta_dias'], np.log1p(fraude['monto_pyg']),
+           alpha=0.5, s=18, c='#e74c3c', label='Fraude', edgecolors='black', linewidth=0.3)
+ax.set_xlabel('Antigüedad cuenta (días)')
+ax.set_ylabel('log1p(monto_pyg)')
+ax.set_title('Antigüedad vs Monto', fontweight='bold')
+ax.legend(markerscale=3)
 
+plt.suptitle('Scatter Plots: Separación de Clases en el Espacio de Features',
+             fontsize=15, fontweight='bold', y=1.01)
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '04_scatter_plots.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-def g_boxplots(df, out):
-    if "escenario_fraude" not in df:
-        return
-    cols = ["ratio_monto_vs_promedio", "distancia_zona_habitual_km", "tx_count_1h",
-            "amount_sum_1h", "monto_pyg", "antiguedad_cuenta_dias"]
-    esc = [e for e in ESCENARIOS if e in set(df["escenario_fraude"])]
-    fig, axes = plt.subplots(2, 3, figsize=(13, 7))
-    for a, c in zip(axes.ravel(), cols):
-        datos = [transformar(df.loc[df.escenario_fraude == e, c], c).dropna() for e in esc]
-        a.boxplot(datos, showfliers=False)
-        a.set_xticklabels([e.replace("_", "\n") for e in esc], fontsize=7)
-        a.set_title(c + (" (log1p)" if c in LOG_SCALE else ""))
-    fig.suptitle("Variables clave por escenario (sin outliers)", y=1.01)
-    guardar(fig, out, "06_boxplots_escenarios.png")
+# ==============================================================================
+# 7. GRÁFICO 5: HISTOGRAMAS DE FEATURES BINARIAS POR CLASE
+# ==============================================================================
+bin_features = [
+    'dispositivo_nuevo', 'ubicacion_inusual', 'destinatario_nuevo',
+    'hora_atipica', 'es_horario_nocturno', 'es_fin_de_semana', 'es_fin_de_mes'
+]
 
+fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+axes = axes.flatten()
 
-def g_correlaciones(df, out):
-    cols = [c for c in FEATURES if c in df] + ["es_fraude"]
-    muestra = df[cols].sample(min(len(df), 100_000), random_state=0)
-    muestra = pd.concat([muestra, df.loc[df.es_fraude == 1, cols]]).drop_duplicates()
-    corr = muestra.corr(method="spearman")
-    fig, ax = plt.subplots(figsize=(11, 9))
-    im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
-    ax.set_xticks(range(len(cols)))
-    ax.set_yticks(range(len(cols)))
-    ax.set_xticklabels(cols, rotation=75, ha="right", fontsize=7)
-    ax.set_yticklabels(cols, fontsize=7)
-    ax.grid(False)
-    for i in range(len(cols)):
-        for j in range(len(cols)):
-            ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center", fontsize=6)
-    fig.colorbar(im, shrink=0.8)
-    ax.set_title("Correlación de Spearman entre variables (alta correlación = redundancia)")
-    guardar(fig, out, "07_correlaciones.png")
+for i, feat in enumerate(bin_features):
+    ax = axes[i]
+    # Tasa de positividad por clase
+    rates = df.groupby('es_fraude')[feat].mean() * 100
+    bars = ax.bar(['Normal', 'Fraude'], rates.values,
+                  color=['#2ecc71', '#e74c3c'], edgecolor='black')
+    for bar, val in zip(bars, rates.values):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                f'{val:.1f}%', ha='center', fontweight='bold')
+    ax.set_title(feat, fontweight='bold')
+    ax.set_ylabel('% de casos con valor=1')
+    ax.set_ylim(0, 105)
 
+# Ocultar el último subplot vacío
+axes[-1].axis('off')
 
-def g_auc(aucs, out):
-    s = pd.Series(aucs).dropna()
-    sep = ((s - 0.5).abs() * 2).sort_values()   # 0 = sin señal, 1 = separación perfecta
-    fig, ax = plt.subplots(figsize=(8, 6))
-    colores = [C_FRAUD if v > 0.96 else C_LEGIT for v in sep.values]
-    ax.barh(sep.index, sep.values, color=colores)
-    ax.set_xlim(0, 1.1)
-    ax.set_xlabel("Poder discriminante = 2 * |AUC - 0.5|")
-    ax.set_title("Señal univariante de cada variable (rojo = posible leakage)")
-    for i, v in enumerate(sep.values):
-        ax.text(v, i, f" {v:.2f}", va="center", fontsize=7)
-    guardar(fig, out, "08_poder_discriminante.png")
+plt.suptitle('Tasa de Activación de Features Binarias por Clase',
+             fontsize=15, fontweight='bold', y=1.02)
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '05_features_binarias.png', dpi=120, bbox_inches='tight')
+plt.show()
 
+# Tabla resumen
+print("\n" + "="*70)
+print(" TASA DE ACTIVACIÓN DE FEATURES BINARIAS (% valor=1)")
+print("="*70)
+resumen = df.groupby('es_fraude')[bin_features].mean() * 100
+resumen.index = ['Normal', 'Fraude']
+print(resumen.round(2).to_string())
 
-def g_nulos(df, out):
-    nulos = (df.isna().mean() * 100)
-    nulos = nulos[nulos > 0].sort_values()
-    if nulos.empty:
-        return
-    fig, ax = plt.subplots(figsize=(8, 3 + 0.3 * len(nulos)))
-    ax.barh(nulos.index, nulos.values, color=C_LEGIT)
-    for i, v in enumerate(nulos.values):
-        ax.text(v, i, f" {v:.2f}%", va="center")
-    ax.set_xlabel("% de nulos")
-    ax.set_title("Valores nulos por columna")
-    guardar(fig, out, "09_nulos.png")
+# ==============================================================================
+# 8. GRÁFICO 6: PERFIL POR ESCENARIO DE FRAUDE
+# ==============================================================================
+scenarios = ['F1_toma_cuenta', 'F2_rafaga_salidas', 'F3_engano', 'F4_pruebas_pequenas']
+df_esc = df[df['escenario_fraude'].isin(scenarios)]
 
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+axes = axes.flatten()
 
-def g_mapa(df, out):
-    fig, ax = plt.subplots(figsize=(7, 7))
-    leg = df[df.es_fraude == 0]
-    legit = leg.sample(min(len(leg), 40_000), random_state=0)
-    fr = df[df.es_fraude == 1]
-    ax.scatter(legit["geo_longitud_emisor"], legit["geo_latitud_emisor"],
-               s=2, alpha=0.2, color=C_LEGIT, label="Legítima (muestra)")
-    ax.scatter(fr["geo_longitud_emisor"], fr["geo_latitud_emisor"],
-               s=14, alpha=0.8, color=C_FRAUD, label="Fraude")
-    ax.set_xlabel("Longitud")
-    ax.set_ylabel("Latitud")
-    ax.set_title("Ubicación de los emisores")
-    ax.legend(markerscale=3)
-    ax.set_aspect("equal", adjustable="datalim")
-    guardar(fig, out, "10_mapa_geografico.png")
+profile_features = ['dispositivo_nuevo', 'ubicacion_inusual', 'destinatario_nuevo', 'hora_atipica']
 
+for i, feat in enumerate(profile_features):
+    ax = axes[i]
+    rates = df_esc.groupby('escenario_fraude')[feat].mean() * 100
+    rates = rates.reindex(scenarios)
+    bars = ax.barh(rates.index, rates.values, color='#e74c3c', edgecolor='black')
+    for bar, val in zip(bars, rates.values):
+        ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height()/2,
+                f'{val:.1f}%', va='center', fontweight='bold')
+    ax.set_title(f'{feat} por escenario', fontweight='bold')
+    ax.set_xlabel('% valor=1')
+    ax.set_xlim(0, 105)
 
-# --------------------------------------------------------------------------- #
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default="transacciones_completo.csv")
-    ap.add_argument("--out", default="eda_output")
-    args = ap.parse_args()
+plt.suptitle('Perfil de Features Binarias por Escenario de Fraude',
+             fontsize=15, fontweight='bold', y=1.02)
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '06_perfil_escenarios.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-    if not os.path.exists(args.input):
-        raise SystemExit(f"No se encontró '{args.input}'. Ejecutá primero generar_datos.py "
-                         "o pasá la ruta con --input.")
-    os.makedirs(args.out, exist_ok=True)
+# ==============================================================================
+# 9. GRÁFICO 7: DISTRIBUCIÓN DE MONTOS Y TIPOS (redondos vs no redondos)
+# ==============================================================================
+fig, axes = plt.subplots(1, 3, figsize=(20, 5))
 
-    print(f"Leyendo {args.input} ...")
-    df = pd.read_csv(args.input, parse_dates=["fecha_hora"])
+# 9.1 Histograma de montos (normal y fraude)
+ax = axes[0]
+ax.hist(np.log1p(df[df['es_fraude'] == 0]['monto_pyg']), bins=80,
+        alpha=0.6, color='#2ecc71', label='Normal', density=True)
+ax.hist(np.log1p(df[df['es_fraude'] == 1]['monto_pyg']), bins=80,
+        alpha=0.6, color='#e74c3c', label='Fraude', density=True)
+ax.set_xlabel('log1p(monto_pyg)')
+ax.set_ylabel('Densidad')
+ax.set_title('Distribución de montos por clase', fontweight='bold')
+ax.legend()
 
-    aucs = reporte_calidad(df, args.out)
+# 9.2 Proporción redondos vs no redondos (global)
+ax = axes[1]
+redondo_global = (df['monto_pyg'] % 1000 == 0).mean() * 100
+no_redondo_global = 100 - redondo_global
+ax.pie([redondo_global, no_redondo_global],
+       labels=['Redondo\n(múltiplo de 1000)', 'No redondo'],
+       autopct='%.1f%%', colors=['#3498db', '#f39c12'],
+       startangle=90, textprops={'fontweight': 'bold'})
+ax.set_title('Tipo de monto (global)', fontweight='bold')
 
-    print("\nGenerando gráficos...")
-    g_balance(df, args.out)
-    g_serie_temporal(df, args.out)
-    g_horaria(df, args.out)
-    g_histogramas(df, args.out)
-    g_binarias(df, args.out)
-    g_boxplots(df, args.out)
-    g_correlaciones(df, args.out)
-    g_auc(aucs, args.out)
-    g_nulos(df, args.out)
-    g_mapa(df, args.out)
-    print(f"\nListo. Resultados en ./{args.out}/")
+# 9.3 Proporción redondos por clase
+ax = axes[2]
+redondo_por_clase = df.groupby('es_fraude')['monto_pyg'].apply(
+    lambda x: (x % 1000 == 0).mean() * 100
+)
+bars = ax.bar(['Normal', 'Fraude'], redondo_por_clase.values,
+              color=['#2ecc71', '#e74c3c'], edgecolor='black')
+for bar, val in zip(bars, redondo_por_clase.values):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+            f'{val:.1f}%', ha='center', fontweight='bold')
+ax.set_title('Montos redondos por clase', fontweight='bold')
+ax.set_ylabel('% de montos redondos')
+ax.set_ylim(0, 100)
 
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '07_montos_tipos.png', dpi=120, bbox_inches='tight')
+plt.show()
 
-if __name__ == "__main__":
-    main()
+# ==============================================================================
+# 10. GRÁFICO 8: COHERENCIA MATEMÁTICA (ratio vs monto/promedio)
+# ==============================================================================
+# Verificar que ratio_monto_vs_promedio ≈ monto_pyg / monto_promedio_usuario_30d
+ratio_calculado = df['monto_pyg'] / df['monto_promedio_usuario_30d'].clip(lower=1)
+diferencia = (df['ratio_monto_vs_promedio'] - ratio_calculado).abs()
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+# 10.1 Dispersión del error
+ax = axes[0]
+ax.scatter(ratio_calculado, df['ratio_monto_vs_promedio'],
+           alpha=0.1, s=5, c='#3498db')
+ax.plot([0, ratio_calculado.max()], [0, ratio_calculado.max()],
+        'r--', label='y = x (coherencia perfecta)')
+ax.set_xlabel('ratio calculado (monto / promedio)')
+ax.set_ylabel('ratio_monto_vs_promedio (columna)')
+ax.set_title('Coherencia del ratio', fontweight='bold')
+ax.legend()
+ax.set_xlim(0, 60)
+ax.set_ylim(0, 60)
+
+# 10.2 Histograma del error absoluto
+ax = axes[1]
+ax.hist(diferencia, bins=50, color='#3498db', edgecolor='black')
+ax.axvline(diferencia.mean(), color='red', linestyle='--',
+           label=f'Error medio: {diferencia.mean():.4f}')
+ax.set_xlabel('|ratio_columna - ratio_calculado|')
+ax.set_ylabel('Frecuencia')
+ax.set_title('Distribución del error de coherencia', fontweight='bold')
+ax.legend()
+
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / '08_coherencia_ratio.png', dpi=120, bbox_inches='tight')
+plt.show()
+
+print("\n" + "="*70)
+print(" COHERENCIA MATEMÁTICA DEL RATIO")
+print("="*70)
+print(f"Error medio absoluto:    {diferencia.mean():.6f}")
+print(f"Error máximo:            {diferencia.max():.6f}")
+print(f"Filas con error > 0.01:  {(diferencia > 0.01).sum():,} ({(diferencia > 0.01).mean()*100:.2f}%)")
+
+# ==============================================================================
+# 11. RESUMEN ESTADÍSTICO POR CLASE
+# ==============================================================================
+print("\n" + "="*70)
+print(" RESUMEN ESTADÍSTICO POR CLASE")
+print("="*70)
+resumen_stats = df.groupby('es_fraude')[feature_cols].agg(['mean', 'median', 'std']).T
+resumen_stats.columns = ['Normal_mean', 'Fraude_mean',
+                          'Normal_median', 'Fraude_median',
+                          'Normal_std', 'Fraude_std']
+resumen_stats['ratio_fraude_normal'] = (
+    resumen_stats['Fraude_mean'] / resumen_stats['Normal_mean'].replace(0, np.nan)
+)
+print(resumen_stats.round(2).to_string())
+
+# ==============================================================================
+# 12. VEREDICTO FINAL
+# ==============================================================================
+print("\n" + "="*70)
+print(" VEREDICTO DE CALIDAD")
+print("="*70)
+
+checks = []
+
+# Check 1: desbalance esperado
+checks.append(('Desbalance ~0.1%', 0.09 <= pct_fraude <= 0.11))
+
+# Check 2: sin nulos
+checks.append(('Sin valores nulos', nulos.sum() == 0))
+
+# Check 3: sin duplicados
+checks.append(('Sin duplicados', dup == 0))
+
+# Check 4: montos enteros
+checks.append(('Montos enteros', df['monto_pyg'].apply(lambda x: float(x).is_integer()).all()))
+
+# Check 5: montos dentro del límite SPI
+checks.append(('Montos ≤ ₲ 10M', (df['monto_pyg'] <= 10_000_000).all()))
+
+# Check 6: montos ≥ ₲ 1.000
+checks.append(('Montos ≥ ₲ 1.000', (df['monto_pyg'] >= 1_000).all()))
+
+# Check 7: coherencia del ratio
+checks.append(('Coherencia del ratio (error < 0.01)', (diferencia > 0.01).mean() < 0.05))
+
+# Check 8: hay fraude en los 4 escenarios
+checks.append(('4 escenarios presentes', df[df['es_fraude']==1]['escenario_fraude'].nunique() == 4))
+
+# Check 9: ratio de fraude claramente mayor en fraudes
+checks.append(('Ratio mayor en fraudes',
+               df[df['es_fraude']==1]['ratio_monto_vs_promedio'].mean() >
+               df[df['es_fraude']==0]['ratio_monto_vs_promedio'].mean() * 3))
+
+for nombre, ok in checks:
+    print(f"  {'✅' if ok else '❌'} {nombre}")
+
+print(f"\n{'='*70}")
+if all(ok for _, ok in checks):
+    print(" ✅ DATASET APROBADO PARA ENTRENAMIENTO")
+else:
+    print(" ⚠️ REVISAR LOS CHECKS FALLIDOS ANTES DE ENTRENAR")
+print(f"{'='*70}")
+
+# Gráficos guardados
+print(f"\n📁 Gráficos guardados en: {OUTPUT_DIR.resolve()}")
+for f in sorted(OUTPUT_DIR.glob('*.png')):
+    print(f"   • {f.name}")
