@@ -1,0 +1,88 @@
+======================================================================
+REPORTE DE CALIDAD DEL DATASET
+======================================================================
+Filas: 427,900 | Columnas: 27
+Período: 2026-01-31 00:01:16  ->  2026-04-30 23:58:52
+Cuentas emisoras únicas: 14,977 | dispositivos: 21,231 | IPs: 57,438
+
+1) BALANCE DE CLASES
+  Legítimas: 427,467 | Fraudes: 433 (0.1012%) | ratio ~ 1:987
+  Fraude por escenario:
+    - vaciado_fraccionado: 174 (40.2%)
+    - toma_cuenta: 172 (39.7%)
+    - ingenieria_social: 87 (20.1%)
+
+2) VALORES NULOS
+  distancia_zona_habitual_km: 805 (0.19%)  (esperable si es historial insuficiente; XGBoost los maneja)
+  monto_promedio_usuario_30d: 2,335 (0.55%)  (esperable si es historial insuficiente; XGBoost los maneja)
+  ratio_monto_vs_promedio: 2,335 (0.55%)  (esperable si es historial insuficiente; XGBoost los maneja)
+
+3) DUPLICADOS
+  [OK ] id_transaccion repetido: 0 filas
+  [OK ] filas idénticas (sin contar el id): 0 filas
+
+4) CONSISTENCIA Y RANGOS
+  [OK ] monto_pyg <= 0: 0 filas
+  [OK ] coordenadas fuera de Paraguay (aprox.): 0 filas
+  [OK ] emisor == receptor: 0 filas
+  [OK ] tx_count_1h > tx_count_24h: 0 filas
+  [OK ] amount_sum_1h > amount_sum_24h: 0 filas
+  [OK ] antiguedad_cuenta_dias < 0: 0 filas
+  [OK ] hora_sin^2 + hora_cos^2 != 1: 0 filas
+  [OK ] flags binarios fuera de {0,1}: 0 filas
+  [OK ] fecha_hora fuera de orden cronológico: 0 filas
+
+5) COLUMNAS CONSTANTES (no aportan información)
+  Ninguna.
+
+6) OUTLIERS Y ASIMETRÍA (regla IQR x3)
+  variable                          %outliers  asimetría        mediana           máximo
+  monto_pyg                             3.94%      16.19     256,000.00    81,088,000.00
+  monto_promedio_usuario_30d            2.43%       4.36     317,667.00    17,748,000.00
+  ratio_monto_vs_promedio               2.75%      11.00           0.80            99.39
+  amount_sum_1h                         6.00%      52.99           0.00    52,938,000.00
+  amount_sum_24h                        7.77%      11.66           0.00    55,492,000.00
+  tx_count_1h                           6.00%       7.72           0.00            11.00
+  tx_count_24h                          0.37%       2.23           0.00            12.00
+  distancia_zona_habitual_km            5.60%      12.80           1.33           539.86
+  antiguedad_cuenta_dias                0.00%      -0.02         810.00         1,619.00
+
+7) PODER DISCRIMINANTE UNIVARIANTE (AUC; 0.5 = sin señal)
+   Un AUC > 0.98 con una sola variable sugiere fuga de información (leakage).
+  ratio_monto_vs_promedio          AUC = 0.802
+  monto_pyg                        AUC = 0.791
+  amount_sum_1h                    AUC = 0.791
+  tx_count_1h                      AUC = 0.787
+  amount_sum_24h                   AUC = 0.749
+  tx_count_24h                     AUC = 0.724
+  es_horario_nocturno              AUC = 0.710
+  hora_cos                         AUC = 0.710
+  hora_atipica                     AUC = 0.695
+  distancia_zona_habitual_km       AUC = 0.682
+  hora_sin                         AUC = 0.652
+  is_new_beneficiary               AUC = 0.609
+  dispositivo_nuevo                AUC = 0.607
+  monto_promedio_usuario_30d       AUC = 0.602
+  ip_nueva                         AUC = 0.593
+  antiguedad_cuenta_dias           AUC = 0.498
+  es_fin_de_semana                 AUC = 0.500
+
+8) FEATURES: MEDIA LEGÍTIMA vs. FRAUDE
+  variable                               legítima         fraude
+  hora_sin                                 -0.262          0.114
+  hora_cos                                 -0.412          0.143
+  es_fin_de_semana                          0.290          0.291
+  es_horario_nocturno                       0.069          0.490
+  hora_atipica                              0.028          0.418
+  dispositivo_nuevo                         0.008          0.222
+  ip_nueva                                  0.057          0.242
+  is_new_beneficiary                        0.250          0.469
+  monto_pyg                           458,993.085  1,595,808.314
+  monto_promedio_usuario_30d          459,363.240    660,151.234
+  ratio_monto_vs_promedio                   1.098          2.818
+  amount_sum_1h                        28,175.520  2,184,187.067
+  amount_sum_24h                      240,686.327  2,365,926.097
+  tx_count_1h                               0.063          2.196
+  tx_count_24h                              0.537          2.450
+  distancia_zona_habitual_km                4.128         83.436
+  antiguedad_cuenta_dias                  802.067        799.111
