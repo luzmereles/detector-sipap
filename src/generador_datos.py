@@ -1,275 +1,266 @@
 """
 ================================================================================
-GENERADOR DE DATOS SINTÉTICOS DE FRAUDE - TRANSFERENCIAS SPI (SIPAP/QR)
+GENERADOR DE DATOS SINTÉTICOS DE FRAUDE - TRANSFERENCIAS SPI (SIPAP/QR)  v2
 ================================================================================
 Alcance: Transferencias instantáneas SPI del lado emisor.
 Límite regulatorio: ₲ 10.000.000 por transacción (BCP, marzo 2026).
 Monto mínimo: ₲ 1.000.
-Genera: dataset_completo.csv, train.csv, valid.csv, test.csv
-        (split cronológico 60/20/20).
+
+Archivos que genera (en ./data):
+  - dataset_completo.csv : todo + timestamp + escenario_fraude (SOLO ANÁLISIS,
+                           NO usar como features).
+  - train.csv / valid.csv / test.csv : split cronológico 60/20/20, solo
+                           features + es_fraude (listos para XGBoost).
+
+Cambios respecto a v1:
+  * escenario_fraude y timestamp ya NO están en train/valid/test (fuga de etiqueta).
+  * Crea la carpeta data/ si no existe.
+  * Generación vectorizada (segundos en vez de minutos).
+  * Conteos consistentes: tx_5min <= tx_1h <= tx_24h (incluyen la tx actual,
+    por lo que el mínimo es 1) y unique_beneficiaries_24h <= tx_24h.
+  * Montos acumulados consistentes: monto <= amount_sum_1h <= amount_sum_24h.
+  * El promedio histórico del usuario se genera PRIMERO y el monto después
+    (antes el promedio dependía del monto actual).
+  * Solapamiento entre clases: normales con ráfagas y con montos grandes
+    legítimos; fraudes "sigilosos" idénticos a una tx normal; ruido en flags.
+  * Mismas distribuciones de antigüedad para ambas clases (sin artefactos).
+  * Sin acumulación artificial de montos en el tope de ₲ 10.000.000.
+  * Orden cronológico estable (reproducible con timestamps repetidos).
 ================================================================================
 """
 
+import os
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
 
 # ==============================================================================
 # CONFIGURACIÓN GLOBAL
 # ==============================================================================
 SEED = 42
-N_TOTAL = 1_000_000           # Total de transacciones
-FRAUD_RATE = 0.001            # 0.1% de fraude
-RUIDO_FRAUDE = 0.08           # 8% de ruido en filas fraudulentas
-LIMITE_SPI = 10_000_000       # ₲ 10 millones (BCP, marzo 2026)
-MONTO_MINIMO = 1_000          # ₲ 1.000
-DIAS_SIMULACION = 90          # 3 meses de datos
+N_TOTAL = 1_000_000            # Total de transacciones
+FRAUD_RATE = 0.003             # 0.3% de fraude (3.000 fraudes ~ 600/200/200 por split... ver verificación)
+RUIDO_FRAUDE = 0.08            # prob. de invertir cada flag binario en fraudes
+FRAUDE_SIGILOSO = 0.10         # % de fraudes indistinguibles de una tx normal
+LIMITE_SPI = 10_000_000        # ₲ 10 millones (BCP, marzo 2026)
+MONTO_MINIMO = 1_000           # ₲ 1.000
+DIAS_SIMULACION = 90           # 3 meses de datos
+FECHA_INICIO = pd.Timestamp("2026-01-01")
+OUT_DIR = "data"
 
-np.random.seed(SEED)
-fecha_inicio = datetime(2026, 1, 1)
+rng = np.random.default_rng(SEED)
 
-# ==============================================================================
-# FUNCIONES AUXILIARES
-# ==============================================================================
-def generar_monto(minimo=MONTO_MINIMO, maximo=LIMITE_SPI, prob_redondo=0.30):
-    """
-    Genera un monto entero en Guaraníes.
-    - 70%: no redondo (ej. 79898, 122298)
-    - 30%: redondo a la unidad de mil (ej. 60000, 100000, 500000)
-    """
-    monto = np.random.lognormal(mean=12.5, sigma=1.2)
-    if np.random.rand() < prob_redondo:
-        monto = round(monto / 1000) * 1000
-    else:
-        monto = int(monto)
-    return int(np.clip(monto, minimo, maximo))
+COLS_EXCLUIR_DE_FEATURES = ["timestamp", "escenario_fraude"]
 
+# Distribución de la hora del día
+_h = np.arange(24)
+_p = np.exp(-0.5 * ((_h - 14) / 4.5) ** 2) + 0.02
+PROB_HORA_NORMAL = _p / _p.sum()
+_n = ((_h < 6) | (_h >= 22)).astype(float)
+PROB_HORA_NOCHE = _n / _n.sum()
 
-def generar_timestamp(dias_max=DIAS_SIMULACION, hora_media=14, hora_std=4):
-    """
-    Genera un timestamp entero (sin microsegundos flotantes).
-    """
-    dia = int(np.random.randint(0, dias_max))
-    hora = int(np.clip(np.random.normal(hora_media, hora_std), 0, 23))
-    minuto = int(np.random.randint(0, 60))
-    segundo = int(np.random.randint(0, 60))
-    return fecha_inicio + timedelta(days=dia, hours=hora, minutes=minuto, seconds=segundo)
-
-
-def aplicar_ruido(valor, prob_ruido=RUIDO_FRAUDE):
-    """Invierte un binario con probabilidad prob_ruido."""
-    return 1 - valor if np.random.rand() < prob_ruido else valor
+# Escenarios de fraude (parámetros: lognormal = (mu, sigma))
+ESCENARIOS = {
+    "F1_toma_cuenta": dict(
+        peso=0.30, p_noche=0.50, monto=(np.log(2_500_000), 0.7), ratio=(np.log(10), 0.6),
+        redondo=0.60, disp=0.85, ubic=0.70, hatip=0.60, dest=0.90, velocidad="normal"),
+    "F2_rafaga_salidas": dict(
+        peso=0.30, p_noche=0.40, monto=(np.log(600_000), 0.7), ratio=(np.log(4), 0.5),
+        redondo=0.50, disp=0.50, ubic=0.60, hatip=0.50, dest=0.70, velocidad="rafaga"),
+    "F3_engano": dict(
+        peso=0.25, p_noche=0.00, monto=(np.log(1_800_000), 0.7), ratio=(np.log(6), 0.5),
+        redondo=0.30, disp=0.05, ubic=0.03, hatip=0.15, dest=0.95, velocidad="normal"),
+    "F4_pruebas_pequenas": dict(
+        peso=0.15, p_noche=0.40, monto=(np.log(60_000), 0.8), ratio=(np.log(1.3), 0.4),
+        redondo=0.40, disp=0.60, ubic=0.40, hatip=0.50, dest=0.80, velocidad="pruebas"),
+}
 
 
 # ==============================================================================
-# 1. LÍNEA BASE: TRANSACCIONES NORMALES (99.9%)
+# FUNCIONES AUXILIARES (todas vectorizadas)
+# ==============================================================================
+def gen_timestamps(n, p_noche=0.0):
+    """Timestamps enteros (sin microsegundos). p_noche = prob. de forzar franja nocturna."""
+    dia = rng.integers(0, DIAS_SIMULACION, n)
+    hora = rng.choice(24, size=n, p=PROB_HORA_NORMAL)
+    if p_noche > 0:
+        m = rng.random(n) < p_noche
+        hora[m] = rng.choice(24, size=int(m.sum()), p=PROB_HORA_NOCHE)
+    segs = dia * 86400 + hora * 3600 + rng.integers(0, 60, n) * 60 + rng.integers(0, 60, n)
+    return FECHA_INICIO + pd.to_timedelta(segs, unit="s")
+
+
+def finalizar_monto(monto, prob_redondo):
+    """Entero en [MONTO_MINIMO, LIMITE_SPI]; parte redondeado a miles.
+    Lo que excede el límite se re-sortea (evita un pico artificial en el tope)."""
+    monto = np.asarray(monto, dtype=float).copy()
+    exceso = monto > LIMITE_SPI
+    monto[exceso] = rng.uniform(0.3, 1.0, int(exceso.sum())) * LIMITE_SPI
+    redondo = rng.random(len(monto)) < prob_redondo
+    monto = np.where(redondo, np.round(monto / 1000) * 1000, np.floor(monto))
+    return np.clip(monto, MONTO_MINIMO, LIMITE_SPI).astype(np.int64)
+
+
+def velocidad_base(n, prob_rafaga=0.03):
+    """Conteos de velocidad (incluyen la tx actual) con 5min <= 1h <= 24h.
+    Un % de normales son 'ráfagas' legítimas (pagos múltiples el mismo día)."""
+    lam = rng.gamma(2.0, 3.0, n)                       # actividad del usuario
+    tx24 = 1 + rng.poisson(lam)
+    tx1h = 1 + rng.binomial(tx24 - 1, 0.15)
+    rafaga = rng.random(n) < prob_rafaga
+    extra = rng.integers(2, 7, n) * rafaga
+    tx24 = tx24 + extra
+    tx1h = tx1h + extra
+    tx5 = 1 + rng.binomial(tx1h - 1, np.where(rafaga, 0.5, 0.2))
+    uniq = np.maximum(1, rng.binomial(tx24, 0.6))
+    return tx5, tx1h, tx24, uniq
+
+
+def acumulados(monto, tx1h, tx24, escala_prev):
+    """amount_sum_1h y amount_sum_24h consistentes: monto <= sum_1h <= sum_24h."""
+    n = len(monto)
+    s1 = monto + (tx1h - 1) * escala_prev * rng.uniform(0.5, 1.5, n)
+    s24 = s1 + (tx24 - tx1h) * escala_prev * rng.uniform(0.5, 1.5, n)
+    return np.floor(s1).astype(np.int64), np.floor(s24).astype(np.int64)
+
+
+def bern(n, p):
+    return (rng.random(n) < p).astype(int)
+
+
+def ruido(x, prob=RUIDO_FRAUDE):
+    flip = rng.random(len(x)) < prob
+    return np.where(flip, 1 - x, x)
+
+
+def armar_df(ts, monto, promedio, tx5, tx1h, tx24, s1, s24, uniq,
+             disp, ubic, hatip, dest, antig, es_fraude, escenario):
+    hora = np.asarray(ts.hour)
+    dow = np.asarray(ts.dayofweek)
+    dmes = np.asarray(ts.day)
+    return pd.DataFrame({
+        "timestamp": ts,
+        "monto_pyg": monto,
+        "hora": hora,
+        "es_fin_de_semana": (dow >= 5).astype(int),
+        "es_fin_de_mes": (dmes >= 25).astype(int),
+        "es_horario_nocturno": ((hora < 6) | (hora >= 22)).astype(int),
+        "hora_atipica": hatip,
+        "dispositivo_nuevo": disp,
+        "ubicacion_inusual": ubic,
+        "antiguedad_cuenta_dias": antig,
+        "tx_count_5min": tx5,
+        "tx_count_1h": tx1h,
+        "tx_count_24h": tx24,
+        "amount_sum_1h": s1,
+        "amount_sum_24h": s24,
+        "monto_promedio_usuario_30d": promedio,
+        "ratio_monto_vs_promedio": np.round(monto / promedio, 4),
+        "destinatario_nuevo": dest,
+        "unique_beneficiaries_24h": uniq,
+        "es_fraude": es_fraude,
+        "escenario_fraude": escenario,
+    })
+
+
+# ==============================================================================
+# 1. TRANSACCIONES NORMALES
+# ==============================================================================
+def generar_normales(n, etiqueta=0, escenario="normal"):
+    ts = gen_timestamps(n)
+    hora = np.asarray(ts.hour)
+    nocturno = ((hora < 6) | (hora >= 22)).astype(int)
+
+    # Promedio histórico del usuario PRIMERO; el monto se genera alrededor de él
+    promedio = np.maximum(rng.lognormal(12.0, 1.1, n).astype(np.int64), MONTO_MINIMO)
+    cola = rng.random(n) < 0.04                       # compras grandes legítimas
+    ratio_obj = np.where(cola, rng.lognormal(np.log(3.5), 0.5, n), rng.lognormal(0.0, 0.45, n))
+    monto = finalizar_monto(promedio * ratio_obj, 0.30)
+    ratio = monto / promedio
+
+    tx5, tx1h, tx24, uniq = velocidad_base(n)
+    s1, s24 = acumulados(monto, tx1h, tx24, promedio.astype(float))
+
+    # Flags con dependencias realistas (cambiar de celular -> ubicación nueva, etc.)
+    grande = (ratio > 2.5).astype(float)
+    disp = bern(n, 0.04 + 0.06 * grande)
+    ubic = bern(n, 0.02 + 0.15 * disp)
+    dest = bern(n, 0.08 + 0.12 * grande)
+    hatip = bern(n, 0.03 + 0.12 * nocturno)
+    antig = rng.integers(30, 3650, n)
+
+    return armar_df(ts, monto, promedio, tx5, tx1h, tx24, s1, s24, uniq,
+                    disp, ubic, hatip, dest, antig,
+                    np.full(n, etiqueta), np.full(n, escenario, dtype=object))
+
+
+# ==============================================================================
+# 2. FRAUDES POR ESCENARIO
+# ==============================================================================
+def generar_fraude(esc, cfg, n):
+    ts = gen_timestamps(n, cfg["p_noche"])
+
+    monto = finalizar_monto(rng.lognormal(*cfg["monto"], n), cfg["redondo"])
+    ratio_obj = rng.lognormal(*cfg["ratio"], n)
+    promedio = np.maximum((monto / ratio_obj).astype(np.int64), MONTO_MINIMO)
+
+    if cfg["velocidad"] == "normal":
+        tx5, tx1h, tx24, uniq = velocidad_base(n)
+        escala_prev = promedio.astype(float)
+    elif cfg["velocidad"] == "rafaga":
+        tx24 = 1 + rng.integers(10, 26, n)
+        tx1h = np.minimum(rng.integers(6, 16, n), tx24)
+        tx5 = np.minimum(rng.integers(3, 8, n), tx1h)
+        uniq = np.maximum(1, np.minimum(rng.integers(4, 13, n), tx24))
+        escala_prev = monto.astype(float)        # las salidas previas son similares
+    else:  # pruebas
+        tx24 = 1 + rng.integers(8, 21, n)
+        tx1h = np.minimum(rng.integers(4, 11, n), tx24)
+        tx5 = np.minimum(rng.integers(2, 7, n), tx1h)
+        uniq = np.maximum(1, np.minimum(rng.integers(1, 5, n), tx24))
+        escala_prev = monto.astype(float)
+
+    s1, s24 = acumulados(monto, tx1h, tx24, escala_prev)
+
+    disp = ruido(bern(n, cfg["disp"]))
+    ubic = ruido(bern(n, cfg["ubic"]))
+    hatip = ruido(bern(n, cfg["hatip"]))
+    dest = ruido(bern(n, cfg["dest"]))
+    antig = rng.integers(30, 3650, n)
+
+    return armar_df(ts, monto, promedio, tx5, tx1h, tx24, s1, s24, uniq,
+                    disp, ubic, hatip, dest, antig,
+                    np.ones(n, dtype=int), np.full(n, esc, dtype=object))
+
+
+# ==============================================================================
+# 3. ENSAMBLAR, ORDENAR CRONOLÓGICAMENTE Y SEPARAR 60/20/20
 # ==============================================================================
 n_fraudes = int(N_TOTAL * FRAUD_RATE)
 n_normales = N_TOTAL - n_fraudes
 
 print(f"Generando {n_normales:,} transacciones normales...")
-timestamps_normales = sorted([generar_timestamp() for _ in range(n_normales)])
+df_normal = generar_normales(n_normales)
 
-# Montos enteros con mezcla redondo/no redondo
-montos = np.array([generar_monto() for _ in range(n_normales)])
-
-# Features temporales
-horas = np.array([t.hour for t in timestamps_normales])
-dias_semana = np.array([t.weekday() for t in timestamps_normales])
-dias_mes = np.array([t.day for t in timestamps_normales])
-
-# Comportamiento base del usuario
-dispositivo_nuevo = np.random.binomial(1, 0.05, n_normales)
-ubicacion_inusual = np.random.binomial(1, 0.03, n_normales)
-destinatario_nuevo = np.random.binomial(1, 0.10, n_normales)
-antiguedad_cuenta = np.random.randint(30, 3650, n_normales)
-
-# Velocidad (conteos)
-tx_5min = np.random.poisson(0.3, n_normales)
-tx_1h = np.random.poisson(1.2, n_normales)
-tx_24h = np.random.poisson(8, n_normales)
-
-# Montos acumulados (enteros)
-amount_1h = np.array([
-    int(min(montos[i] * np.random.uniform(0.8, 2.5), LIMITE_SPI * 3))
-    for i in range(n_normales)
-])
-amount_24h = np.array([
-    int(min(amount_1h[i] * np.random.uniform(2, 6), LIMITE_SPI * 15))
-    for i in range(n_normales)
-])
-
-# Promedio histórico (entero) y ratio
-monto_promedio_30d = np.array([
-    int(max(montos[i] * np.random.uniform(0.7, 1.4), MONTO_MINIMO))
-    for i in range(n_normales)
-])
-ratio_monto = montos / monto_promedio_30d
-unique_benef_24h = np.random.poisson(2.5, n_normales)
-
-df_normal = pd.DataFrame({
-    'timestamp': timestamps_normales,
-    'monto_pyg': montos,
-    'hora': horas,
-    'es_fin_de_semana': (dias_semana >= 5).astype(int),
-    'es_fin_de_mes': (dias_mes >= 25).astype(int),
-    'es_horario_nocturno': ((horas < 6) | (horas >= 22)).astype(int),
-    'hora_atipica': np.random.binomial(1, 0.04, n_normales),
-    'dispositivo_nuevo': dispositivo_nuevo,
-    'ubicacion_inusual': ubicacion_inusual,
-    'antiguedad_cuenta_dias': antiguedad_cuenta,
-    'tx_count_5min': tx_5min,
-    'tx_count_1h': tx_1h,
-    'tx_count_24h': tx_24h,
-    'amount_sum_1h': amount_1h,
-    'amount_sum_24h': amount_24h,
-    'monto_promedio_usuario_30d': monto_promedio_30d,
-    'ratio_monto_vs_promedio': ratio_monto,
-    'destinatario_nuevo': destinatario_nuevo,
-    'unique_beneficiaries_24h': unique_benef_24h,
-    'es_fraude': 0,
-    'escenario_fraude': 'normal'
-})
-
-# ==============================================================================
-# 2. FRAUDES POR ESCENARIO (0.1%) - Distribución uniforme en el tiempo
-# ==============================================================================
 print(f"Generando {n_fraudes:,} transacciones fraudulentas...")
+pesos = np.array([c["peso"] for c in ESCENARIOS.values()])
+conteos = rng.multinomial(n_fraudes, pesos / pesos.sum())
 
-# Distribuir los fraudes uniformemente en los 90 días
-dias_fraude = np.linspace(0, DIAS_SIMULACION - 1, n_fraudes)
-np.random.shuffle(dias_fraude)
+partes = []
+for (esc, cfg), n_esc in zip(ESCENARIOS.items(), conteos):
+    n_sig = int((rng.random(n_esc) < FRAUDE_SIGILOSO).sum())   # fraudes que parecen normales
+    partes.append(generar_fraude(esc, cfg, n_esc - n_sig))
+    if n_sig > 0:
+        partes.append(generar_normales(n_sig, etiqueta=1, escenario=esc))
+df_fraude = pd.concat(partes, ignore_index=True)
 
-fraud_timestamps = []
-for dia in dias_fraude:
-    hora_base = np.random.choice([2, 3, 4, 10, 14, 18, 22])
-    hora = int((hora_base + np.random.randint(-1, 2)) % 24)
-    minuto = int(np.random.randint(0, 60))
-    segundo = int(np.random.randint(0, 60))
-    fraud_timestamps.append(
-        fecha_inicio + timedelta(days=int(dia), hours=hora, minutes=minuto, seconds=segundo)
-    )
-
-escenarios = ['F1_toma_cuenta', 'F2_rafaga_salidas', 'F3_engano', 'F4_pruebas_pequenas']
-escenario_asignado = np.random.choice(escenarios, n_fraudes, p=[0.30, 0.30, 0.25, 0.15])
-
-fraud_rows = []
-for i in range(n_fraudes):
-    esc = escenario_asignado[i]
-    ts = fraud_timestamps[i]
-    hora = ts.hour
-
-    # Valores por defecto
-    dispositivo = 0; ubicacion = 0; hora_atip = 0
-    ratio = 1.0; dest_nuevo = 0
-    tx5 = np.random.poisson(0.3); tx1h = np.random.poisson(1); tx24 = np.random.poisson(5)
-    unique_b = np.random.poisson(2)
-    antig = np.random.randint(60, 3650)
-
-    if esc == 'F1_toma_cuenta':
-        dispositivo = 1; ubicacion = 1
-        hora_atip = 1 if np.random.rand() < 0.7 else 0
-        ratio = np.random.uniform(8, 40)
-        monto_base = np.random.randint(2_000_000, LIMITE_SPI)
-        if np.random.rand() < 0.6:
-            monto_base = round(monto_base / 1000) * 1000
-        dest_nuevo = 1; antig = np.random.randint(180, 3650)
-        tx5 = 0; tx1h = np.random.randint(1, 3)
-
-    elif esc == 'F2_rafaga_salidas':
-        dispositivo = np.random.choice([0, 1], p=[0.5, 0.5])
-        ubicacion = 1 if np.random.rand() < 0.6 else 0
-        hora_atip = 1 if np.random.rand() < 0.5 else 0
-        ratio = np.random.uniform(2, 10)
-        monto_base = np.random.randint(200_000, 2_000_000)
-        if np.random.rand() < 0.5:
-            monto_base = round(monto_base / 1000) * 1000
-        tx5 = np.random.randint(3, 8); tx1h = np.random.randint(6, 15); tx24 = np.random.randint(10, 25)
-        unique_b = np.random.randint(5, 12)
-        dest_nuevo = np.random.binomial(1, 0.7)
-
-    elif esc == 'F3_engano':
-        dispositivo = 0; ubicacion = 0
-        hora_atip = 1 if np.random.rand() < 0.3 else 0
-        ratio = np.random.uniform(3, 20)
-        monto_base = np.random.randint(500_000, 5_000_000)
-        if np.random.rand() < 0.3:
-            monto_base = round(monto_base / 1000) * 1000
-        dest_nuevo = 1
-        tx5 = np.random.poisson(0.5); tx1h = np.random.randint(1, 4)
-        antig = np.random.randint(30, 3650)
-
-    elif esc == 'F4_pruebas_pequenas':
-        dispositivo = np.random.choice([0, 1], p=[0.4, 0.6])
-        ubicacion = 1 if np.random.rand() < 0.4 else 0
-        hora_atip = 1 if np.random.rand() < 0.5 else 0
-        ratio = np.random.uniform(0.8, 3)
-        monto_base = np.random.randint(10_000, 150_000)
-        if np.random.rand() < 0.4:
-            monto_base = round(monto_base / 1000) * 1000
-        tx5 = np.random.randint(2, 6); tx1h = np.random.randint(4, 10); tx24 = np.random.randint(8, 20)
-        unique_b = np.random.randint(1, 4)
-        dest_nuevo = np.random.binomial(1, 0.8)
-
-    # Aplicar ruido
-    dispositivo = aplicar_ruido(dispositivo)
-    ubicacion = aplicar_ruido(ubicacion)
-    hora_atip = aplicar_ruido(hora_atip)
-    dest_nuevo = aplicar_ruido(dest_nuevo)
-
-    # Monto final entero
-    monto_final = int(np.clip(monto_base, MONTO_MINIMO, LIMITE_SPI))
-    monto_prom = int(max(monto_final / max(ratio, 0.5), MONTO_MINIMO))
-
-    # Montos acumulados enteros según escenario
-    if esc == 'F2_rafaga_salidas':
-        amt1h = int(min(monto_final * tx1h, LIMITE_SPI * 5))
-        amt24h = int(min(monto_final * tx24, LIMITE_SPI * 20))
-    elif esc == 'F4_pruebas_pequenas':
-        amt1h = int(min(monto_final * tx1h * 1.2, LIMITE_SPI * 5))
-        amt24h = int(min(monto_final * tx24 * 1.5, LIMITE_SPI * 20))
-    else:
-        amt1h = int(min(monto_final * 1.5, LIMITE_SPI * 5))
-        amt24h = int(min(monto_final * 4, LIMITE_SPI * 20))
-
-    fraud_rows.append({
-        'timestamp': ts,
-        'monto_pyg': monto_final,
-        'hora': hora,
-        'es_fin_de_semana': 1 if ts.weekday() >= 5 else 0,
-        'es_fin_de_mes': 1 if ts.day >= 25 else 0,
-        'es_horario_nocturno': 1 if hora < 6 or hora >= 22 else 0,
-        'hora_atipica': hora_atip,
-        'dispositivo_nuevo': dispositivo,
-        'ubicacion_inusual': ubicacion,
-        'antiguedad_cuenta_dias': antig,
-        'tx_count_5min': tx5,
-        'tx_count_1h': tx1h,
-        'tx_count_24h': tx24,
-        'amount_sum_1h': amt1h,
-        'amount_sum_24h': amt24h,
-        'monto_promedio_usuario_30d': monto_prom,
-        'ratio_monto_vs_promedio': monto_final / monto_prom,
-        'destinatario_nuevo': dest_nuevo,
-        'unique_beneficiaries_24h': unique_b,
-        'es_fraude': 1,
-        'escenario_fraude': esc
-    })
-
-df_fraude = pd.DataFrame(fraud_rows)
-
-# ==============================================================================
-# 3. COMBINAR, ORDENAR CRONOLÓGICAMENTE Y SEPARAR 60/20/20
-# ==============================================================================
 df = pd.concat([df_normal, df_fraude], ignore_index=True)
-df = df.sort_values('timestamp').reset_index(drop=True)
+df = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
-df_features = df.drop(columns=['timestamp'])
+df_features = df.drop(columns=COLS_EXCLUIR_DE_FEATURES)
 
 n = len(df_features)
 train_end = int(n * 0.60)
 valid_end = int(n * 0.80)
-
 train_df = df_features.iloc[:train_end].copy()
 valid_df = df_features.iloc[train_end:valid_end].copy()
 test_df = df_features.iloc[valid_end:].copy()
@@ -277,68 +268,64 @@ test_df = df_features.iloc[valid_end:].copy()
 # ==============================================================================
 # 4. VERIFICACIONES DE CALIDAD
 # ==============================================================================
-print("\n" + "="*65)
+print("\n" + "=" * 65)
 print("VERIFICACIÓN DE DISTRIBUCIÓN")
-print("="*65)
+print("=" * 65)
+for name, subset in [("Train (60%)", train_df), ("Valid (20%)", valid_df), ("Test (20%)", test_df)]:
+    nf = int(subset["es_fraude"].sum())
+    print(f"{name:12} | {len(subset):>9,} filas | {nf:>5} fraudes ({subset['es_fraude'].mean()*100:.3f}%)")
+    if nf == 0:
+        raise ValueError(f"ERROR CRÍTICO: {name} no tiene fraudes.")
 
-for name, subset in [('Train (60%)', train_df), ('Valid (20%)', valid_df), ('Test (20%)', test_df)]:
-    n_fraudes_subset = int(subset['es_fraude'].sum())
-    pct = subset['es_fraude'].mean() * 100
-    print(f"{name:12} | {len(subset):>9,} filas | {n_fraudes_subset:>4} fraudes ({pct:.3f}%)")
-    if n_fraudes_subset == 0:
-        raise ValueError(f"❌ ERROR CRÍTICO: {name} no tiene fraudes.")
+print("\n" + "=" * 65)
+print("VERIFICACIÓN DE CONSISTENCIA")
+print("=" * 65)
+checks = {
+    "sin fuga: escenario_fraude/timestamp fuera de train/valid/test":
+        not any(c in d.columns for d in (train_df, valid_df, test_df) for c in COLS_EXCLUIR_DE_FEATURES),
+    "tx_5min <= tx_1h <= tx_24h":
+        bool(((df.tx_count_5min <= df.tx_count_1h) & (df.tx_count_1h <= df.tx_count_24h)).all()),
+    "tx_5min >= 1": bool((df.tx_count_5min >= 1).all()),
+    "unique_beneficiaries_24h <= tx_24h":
+        bool((df.unique_beneficiaries_24h <= df.tx_count_24h).all()),
+    "monto <= sum_1h <= sum_24h":
+        bool(((df.monto_pyg <= df.amount_sum_1h) & (df.amount_sum_1h <= df.amount_sum_24h)).all()),
+    "monto en [1.000, 10.000.000]":
+        bool(df.monto_pyg.between(MONTO_MINIMO, LIMITE_SPI).all()),
+    "sin nulos": not bool(df.isna().any().any()),
+    "sin microsegundos": not bool((df.timestamp.dt.microsecond != 0).any()),
+}
+for k, v in checks.items():
+    print(f"  [{'OK' if v else 'FALLA'}] {k}")
+if not all(checks.values()):
+    raise ValueError("Falló al menos una verificación de consistencia.")
 
-print("\n" + "="*65)
-print("VERIFICACIÓN DE TIPOS DE DATOS")
-print("="*65)
-print(f"Tipo timestamp:       {df['timestamp'].dtype}")
-print(f"Tipo monto_pyg:       {df['monto_pyg'].dtype}")
-print(f"Tipo amount_sum_1h:   {df['amount_sum_1h'].dtype}")
-print(f"Tipo monto_prom_30d:  {df['monto_promedio_usuario_30d'].dtype}")
-print(f"Tipo ratio:           {df['ratio_monto_vs_promedio'].dtype}")
+print(f"\nMonto mín / medio / máx: ₲ {df.monto_pyg.min():,.0f} / {df.monto_pyg.mean():,.0f} / {df.monto_pyg.max():,.0f}")
+print(f"Montos exactamente en el tope: {(df.monto_pyg == LIMITE_SPI).mean()*100:.3f}%")
+print("\nRatio monto/promedio (cuantiles 50/90/99):")
+for lbl, sub in [("normales", df[df.es_fraude == 0]), ("fraudes", df[df.es_fraude == 1])]:
+    q = sub.ratio_monto_vs_promedio.quantile([0.5, 0.9, 0.99]).round(2).tolist()
+    print(f"  {lbl:9}: {q}")
 
-# Verificar que los timestamps no tengan microsegundos
-tiene_microsegundos = df['timestamp'].apply(lambda x: x.microsecond != 0).any()
-print(f"\n¿Hay microsegundos?   {tiene_microsegundos}")
-print(f"Ejemplo timestamp:    {df['timestamp'].iloc[0]}")
-
-# Verificar montos enteros
-todos_enteros = df['monto_pyg'].apply(lambda x: float(x).is_integer()).all()
-print(f"¿Todos los montos enteros? {todos_enteros}")
-print(f"Monto mínimo:         ₲ {df['monto_pyg'].min():>12,.0f}")
-print(f"Monto máximo:         ₲ {df['monto_pyg'].max():>12,.0f}")
-print(f"Monto promedio:       ₲ {df['monto_pyg'].mean():>12,.0f}")
-
-# Ejemplos de montos redondos vs no redondos
-redondos = df[df['monto_pyg'] % 1000 == 0]['monto_pyg'].head(5).tolist()
-no_redondos = df[df['monto_pyg'] % 1000 != 0]['monto_pyg'].head(5).tolist()
-print(f"\nEjemplos redondos:    {[f'₲ {m:,.0f}' for m in redondos]}")
-print(f"Ejemplos no redondos: {[f'₲ {m:,.0f}' for m in no_redondos]}")
-
-# Ratio por clase
-print(f"\nRatio promedio (global):   {df['ratio_monto_vs_promedio'].mean():.2f}")
-print(f"Ratio promedio (fraudes):  {df[df['es_fraude']==1]['ratio_monto_vs_promedio'].mean():.2f}")
-print(f"Ratio promedio (normales): {df[df['es_fraude']==0]['ratio_monto_vs_promedio'].mean():.2f}")
-
-# Distribución de escenarios
-print("\n" + "="*65)
+print("\n" + "=" * 65)
 print("DISTRIBUCIÓN DE ESCENARIOS DE FRAUDE")
-print("="*65)
-print(df[df['es_fraude']==1]['escenario_fraude'].value_counts().to_string())
+print("=" * 65)
+print(df[df.es_fraude == 1]["escenario_fraude"].value_counts().to_string())
 
 # ==============================================================================
 # 5. GUARDAR ARCHIVOS
 # ==============================================================================
-df.to_csv('data/dataset_completo.csv', index=False)
-train_df.to_csv('data/train.csv', index=False)
-valid_df.to_csv('data/valid.csv', index=False)
-test_df.to_csv('data/test.csv', index=False)
+os.makedirs(OUT_DIR, exist_ok=True)
+df.to_csv(f"{OUT_DIR}/dataset_completo.csv", index=False)
+train_df.to_csv(f"{OUT_DIR}/train.csv", index=False)
+valid_df.to_csv(f"{OUT_DIR}/valid.csv", index=False)
+test_df.to_csv(f"{OUT_DIR}/test.csv", index=False)
 
-print("\n" + "="*65)
-print("✅ ARCHIVOS GENERADOS")
-print("="*65)
-print(f"  • dataset_completo.csv  ({len(df):,} filas)")
-print(f"  • train.csv             ({len(train_df):,} filas)")
-print(f"  • valid.csv             ({len(valid_df):,} filas)")
-print(f"  • test.csv              ({len(test_df):,} filas)")
-print("="*65)
+print("\n" + "=" * 65)
+print("ARCHIVOS GENERADOS en ./" + OUT_DIR)
+print("=" * 65)
+print(f"  dataset_completo.csv  ({len(df):,} filas, incluye timestamp y escenario)")
+print(f"  train.csv             ({len(train_df):,} filas)")
+print(f"  valid.csv             ({len(valid_df):,} filas)")
+print(f"  test.csv              ({len(test_df):,} filas)")
+print("=" * 65)
