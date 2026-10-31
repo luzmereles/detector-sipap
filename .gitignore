@@ -1,21 +1,11 @@
-# Entornos virtuales
-venv/
-.venv/
-env/
+# dataset completo (~65 MB): se regenera con generar_datos.py (semilla fija = mismo resultado)
+data/transacciones_spi.csv.gz
 
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-
-# Datos
-data/*.csv
-
-# Permitir archivos de referencia si posteriormente se necesitan
-!data/.gitkeep
-
-
-# Entornos y configuración local
+.pytest_cache/
+.venv/
+venv/
 .env
 .DS_Store
+.ipynb_checkpoints/
