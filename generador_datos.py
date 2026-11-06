@@ -5,7 +5,7 @@ vistas desde el BANCO EMISOR.
 Simula 8.000 clientes de bancos paraguayos durante 13 meses (junio 2025 - junio 2026; junio 2025 se usa
 solo como historial previo, el dataset cubre julio 2025 - junio 2026) con comportamientos financieros
 realistas (fin de mes, aguinaldo, horarios, ciudades, sesiones de varios pagos seguidos) e inyecta
-4 tipologías de fraude con una tasa < 0,1 %.
+5 tipologías de fraude con una tasa < 0,1 %.
 
 El dataset se genera LIMPIO desde su creación (no se simulan errores de carga). Su calidad se evalúa
 en notebooks/01_eda.ipynb y los modelos se entrenan en notebooks/02_entrenamiento.ipynb (Google Colab).
@@ -82,37 +82,28 @@ GRANULARIDAD = np.array([1, 100, 1_000, 10_000, 50_000])
 P_GRANULARIDAD = np.array([0.30, 0.20, 0.30, 0.12, 0.08])
 
 # Tipologías de fraude: % de CASOS (eventos de fraude), de mayor a menor peso.
-# Un caso puede tener varias transferencias (K_ESPERADO = transferencias promedio por caso).
-# Como cada ráfaga tiene 3 a 7 transferencias, en CANTIDAD DE TRANSFERENCIAS la ráfaga queda primera.
+# Un caso puede tener varias transferencias (K_ESPERADO = transferencias promedio por caso);
+# con estos valores el orden también se mantiene en cantidad de transferencias.
 TIPOLOGIAS = {
-    "toma_de_cuenta": 0.45,
-    "rafaga_de_transferencias": 0.25,
+    "toma_de_cuenta": 0.40,
+    "rafaga_de_transferencias": 0.15,
     "cuenta_mula": 0.20,
+    "ingenieria_social": 0.15,
     "camuflado": 0.10,
 }
-K_ESPERADO = {"toma_de_cuenta": 2.4, "rafaga_de_transferencias": 5.0, "cuenta_mula": 3.15, "camuflado": 1.3}
-
-# Camuflado: imita el comportamiento normal del cliente con 1 o 2 rarezas LEVES (cada una también es
-# frecuente en las transferencias legítimas). Probabilidad de que se elija cada rareza:
-RAREZAS_CAMUFLADO = {
-    "destinatario_nuevo": 0.35,  # una cuenta nueva (si no, la de un contacto habitual comprometido)
-    "monto_mayor": 0.25,         # 1,3 a 2,5 veces su promedio (no 4 a 8 veces como la toma de cuenta)
-    "segundo_pago": 0.20,        # "falta un pago más": otro pago al mismo destino horas después
-    "hora_borde": 0.15,          # temprano (6-7 h) o tarde (22-23 h), nunca de madrugada
-    "otra_ciudad": 0.05,         # desde otra ciudad
-}
-P_CAMUFLADO_DOS_RAREZAS = 0.40   # el resto de los casos tiene una sola rareza
+K_ESPERADO = {"toma_de_cuenta": 2.4, "rafaga_de_transferencias": 5.0, "cuenta_mula": 3.15,
+              "ingenieria_social": 1.6, "camuflado": 1.0}
 
 # Población legítima y ruido (casos legítimos que se parecen a fraude). El ruido es intencional:
 # ninguna señal por sí sola debe alcanzar para decidir que una transferencia es fraude.
 P_CLIENTES_NUEVOS = 0.10       # abren su cuenta durante el año (jul 2025 - may 2026)
-P_NUEVOS_ACTIVOS = 0.15        # de ellos, los que hacen varias transferencias en sus primeros días
+P_NUEVOS_ACTIVOS = 0.25        # de ellos, los que hacen varias transferencias en sus primeros días
 P_ESPORADICOS = 0.10           # clientes con pocas transferencias al mes (a menudo sin historial)
 P_VIAJE = 0.05                 # transferencias hechas desde otra ciudad
-EPISODIOS_DISPOSITIVO = 1.2    # media anual de dispositivos nuevos legítimos por cliente
+EPISODIOS_DISPOSITIVO = 2.4    # media anual de dispositivos nuevos legítimos por cliente
                                # (celular nuevo, reinstalar la app, otra computadora)
-P_HABITUAL_COTIDIANA = 0.88    # pagos cotidianos a comercios habituales (el resto, a uno nuevo)
-P_HABITUAL_PERSONAL = 0.88     # envíos a contactos habituales (el resto, a alguien nuevo)
+P_HABITUAL_COTIDIANA = 0.80    # pagos cotidianos a comercios habituales (el resto, a uno nuevo)
+P_HABITUAL_PERSONAL = 0.82     # envíos a contactos habituales (el resto, a alguien nuevo)
 
 
 def _norm(d: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -360,7 +351,7 @@ def generar(n_clientes: int, tasa_fraude: float, seed: int) -> pd.DataFrame:
 
 
 def _inyectar_fraude(df, cli, contactos, tasa, rng, bancos, p_bancos, perfil) -> pd.DataFrame:
-    """Cuatro tipologías (ver data/DATASET.md). Cada caso es una COMBINACIÓN de señales que también
+    """Cinco tipologías (ver data/DATASET.md). Cada caso es una COMBINACIÓN de señales que también
     aparecen por separado en transferencias legítimas: ninguna señal sola alcanza para decidir."""
     tipos, p_tipos = _norm(TIPOLOGIAS)
     n_periodo = int((df["timestamp"] >= INICIO).sum())
@@ -390,25 +381,14 @@ def _inyectar_fraude(df, cli, contactos, tasa, rng, bancos, p_bancos, perfil) ->
     def momento(dia, h):
         return dia.normalize() + pd.Timedelta(hours=h, seconds=int(rng.integers(0, 3600)))
 
-    def victima(dia, dias_minimos=7):
-        """Cliente con la cuenta abierta hace al menos `dias_minimos` días y con historial previo."""
+    def victima(dia):
+        """Cliente con la cuenta abierta hace al menos 7 días y con historial previo."""
         for _ in range(100):
             c = int(rng.integers(len(cli)))
             t_c = tiempos.get(cli.at[c, "emisor"])
-            if alta[c] <= dia - pd.Timedelta(days=dias_minimos) and t_c is not None and (t_c < dia.to_datetime64()).any():
+            if alta[c] <= dia - pd.Timedelta(days=7) and t_c is not None and (t_c < dia.to_datetime64()).any():
                 return c
         return c
-
-    def contacto_habitual(c, dia):
-        """Un destinatario al que el cliente YA le transfirió antes de `dia` (elegido según la frecuencia)."""
-        previas = leg.loc[(leg["cuenta_emisor_id"] == cli.at[c, "emisor"]) & (leg["timestamp"] < dia),
-                          ["cuenta_destino_id", "banco_destino"]]
-        if previas.empty:
-            return None
-        frec = previas.value_counts()
-        return frec.index[int(rng.choice(len(frec), p=(frec / frec.sum()).to_numpy()))]
-
-    rarezas_cam, p_rarezas_cam = _norm(RAREZAS_CAMUFLADO)
 
     def dormida(dia):
         """Cliente esporádico sin transferencias en los 30 días previos (cuenta mula 'dormida')."""
@@ -425,7 +405,7 @@ def _inyectar_fraude(df, cli, contactos, tasa, rng, bancos, p_bancos, perfil) ->
     filas = []
     for e, tipo in enumerate(eventos):
         dia = dias_p[rng.choice(len(dias_p), p=w_p)]
-        c = victima(dia, 60 if tipo == "camuflado" else 7)  # el camuflado nunca usa una cuenta reciente
+        c = victima(dia)
         emisor = {"cuenta_emisor_id": cli.at[c, "emisor"], "banco_origen": cli.at[c, "banco"],
                   "ciudad_habitual": cli.at[c, "ciudad"], "alta_cuenta_origen": cli.at[c, "alta_cuenta"]}
         base = float(base_cli.get(emisor["cuenta_emisor_id"], 0.05 * cli.at[c, "ingreso"]))   # monto típico
@@ -510,39 +490,32 @@ def _inyectar_fraude(df, cli, contactos, tasa, rng, bancos, p_bancos, perfil) ->
                 tx.append((t, dest, bd, monto))
                 t = t + pd.Timedelta(minutes=float(rng.uniform(5, 180)))
 
-        else:  # camuflado: imita el comportamiento normal del cliente, con 1 o 2 rarezas leves
-            # Nunca tiene las señales fuertes de las otras tipologías: usa SU dispositivo, no opera de
-            # madrugada (0-5 h), la cuenta tiene 60 días o más y hace como mucho 2 transferencias.
-            # Cubre las estafas por WhatsApp o Marketplace (la víctima autoriza el pago) y las cuentas
-            # de contactos habituales que fueron comprometidas.
-            n_rarezas = 2 if rng.random() < P_CAMUFLADO_DOS_RAREZAS else 1
-            rarezas = set(rng.choice(rarezas_cam, n_rarezas, replace=False, p=p_rarezas_cam))
-            h = hora_habitual(c)
-            for _ in range(50):  # su horario habitual, pero nunca de madrugada
-                if h >= 6:
-                    break
-                h = hora_habitual(c)
-            h = max(h, 6)
-            if "hora_borde" in rarezas:
-                h = int(rng.choice([6, 7, 22, 23]))
-            if "otra_ciudad" in rarezas:
-                ciudad = otra_ciudad(np.array([cli.at[c, "ciudad"]], dtype=object), rng)[0]
-            habitual = None if "destinatario_nuevo" in rarezas else contacto_habitual(c, dia)
-            if habitual is None:
+        elif tipo == "ingenieria_social":  # la víctima opera con SU dispositivo y en SU horario
+            t = momento(dia, hora_habitual(c))
+            dest, bd = f"S{e}", rng.choice(bancos, p=p_bancos)
+            if rng.random() < 0.15:  # a veces el estafador usa una cuenta a la que ya le había pagado
+                ids_cont, banco_cont = contactos[c]
+                q = int(rng.integers(len(ids_cont)))
+                dest, bd = ids_cont[q], banco_cont[q]
+            k = 1 if rng.random() < 0.60 else int(rng.integers(2, 4))  # "falta un pago más"
+            for _ in range(k):
+                if rng.random() < 0.85:
+                    monto = media * rng.uniform(1.5, 4)    # mayor a su promedio
+                else:
+                    monto = rng.lognormal(np.log(800_000), 0.9)
+                tx.append((t, dest, bd, monto))
+                # el pago siguiente llega horas después, el mismo día o el siguiente
+                t = t + pd.Timedelta(hours=float(rng.uniform(0.5, 20)))
+
+        else:  # camuflado: imita dispositivo, horario, importe y frecuencia habituales
+            t = momento(dia, hora_habitual(c))
+            if rng.random() < 0.4:  # cuenta de un contacto habitual que fue comprometida
+                ids_cont, banco_cont = contactos[c]
+                q = int(rng.integers(len(ids_cont)))
+                dest, bd = ids_cont[q], banco_cont[q]
+            else:
                 dest, bd = f"Z{e}", rng.choice(bancos, p=p_bancos)
-            else:   # cuenta de un contacto habitual que fue comprometida
-                dest, bd = habitual
-            if "monto_mayor" in rarezas:
-                monto = media * rng.uniform(1.3, 2.5)
-            else:   # parecido a su monto típico
-                monto = base * rng.uniform(0.8, 1.5)
-            t = momento(dia, h)
-            tx.append((t, dest, bd, monto))
-            if "segundo_pago" in rarezas:  # "falta un pago más": mismo destino, entre 30 min y 3 h después
-                t = t + pd.Timedelta(hours=float(rng.uniform(0.5, 3)))
-                if t.hour < 6:             # si caería de madrugada, lo hace a la mañana siguiente
-                    t = t.normalize() + pd.Timedelta(hours=float(rng.uniform(6.5, 9)))
-                tx.append((t, dest, bd, monto * rng.uniform(0.5, 1.2)))
+            tx.append((t, dest, bd, base * rng.uniform(0.8, 1.8)))
 
         montos = redondear(np.array([m for *_, m in tx]), rng)
         for (t, dest, bd, _), m in zip(tx, montos):

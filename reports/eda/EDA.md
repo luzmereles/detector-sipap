@@ -1,30 +1,31 @@
 # EDA del dataset sintético SPI (generado por notebooks/01_eda.ipynb)
 
-- Transferencias: **1.689.911** · fraudes: **1.362** (0.0806%)
+- Transferencias: **1.692.473** · fraudes: **1.331** (0.0786%)
 - Período: 01/07/2025 00:01 – 30/06/2026 23:59
-- Emisores: 8.040 · cuentas destino: 169.771 · bancos: 12 · ciudades: 18
-- Monto: mínimo Gs. 1.000, mediana Gs. 118.143, máximo Gs. 10.000.000
+- Emisores: 8.058 · cuentas destino: 215.208 · bancos: 12 · ciudades: 18
+- Monto: mínimo Gs. 1.000, mediana Gs. 118.268, máximo Gs. 10.000.000
 - Importes que no son múltiplo de 1.000: 48.0% · múltiplos de 10.000: 16.6%
-- Transferencias legítimas de Gs. 5 millones o más: 16.632 · fraudes menores a Gs. 100.000: 555
-- Transferencias sin historial (monto_promedio_30d_gs = 0): 5.143
+- Transferencias legítimas de Gs. 5 millones o más: 16.886 · fraudes menores a Gs. 100.000: 427
+- Transferencias sin historial (monto_promedio_30d_gs = 0): 5.077
 - Proyección PCA: las 2 primeras componentes explican 26.1% de la varianza
 
 ## Partición temporal
 
 |               |   transferencias |   fraudes |
 |:--------------|-----------------:|----------:|
-| entrenamiento |          1136689 |       955 |
-| validacion    |           275444 |       157 |
-| prueba        |           277778 |       250 |
+| entrenamiento |          1137643 |       939 |
+| validacion    |           275906 |       180 |
+| prueba        |           278924 |       212 |
 
 ## Transferencias fraudulentas por tipología
 
 | tipo_fraude              | transferencias   | porcentaje   | monto_mediano_gs   | monto_minimo_gs   | monto_maximo_gs   |
 |:-------------------------|:-----------------|:-------------|:-------------------|:------------------|:------------------|
-| toma_de_cuenta           | 469              | 34.4         | 435.000            | 7.915             | 9.860.000         |
-| rafaga_de_transferencias | 558              | 41.0         | 65.519             | 10.700            | 587.235           |
-| cuenta_mula              | 280              | 20.6         | 1.964.436          | 502.300           | 7.188.800         |
-| camuflado                | 55               | 4.0          | 230.000            | 34.000            | 1.507.600         |
+| toma_de_cuenta           | 503              | 37.8         | 325.714            | 8.800             | 9.250.000         |
+| rafaga_de_transferencias | 360              | 27.0         | 54.890             | 10.000            | 540.000           |
+| cuenta_mula              | 308              | 23.1         | 2.302.969          | 500.000           | 8.056.000         |
+| ingenieria_social        | 110              | 8.3          | 872.878            | 156.529           | 6.989.244         |
+| camuflado                | 50               | 3.8          | 160.000            | 69.300            | 700.000           |
 
 ## Restricciones verificadas
 
@@ -42,51 +43,51 @@
 | antiguedad_cuenta_origen_dias >= 0                                                     |             0 | ✓        |                                                                                                                  |
 | es_fraude en {0, 1}                                                                    |             0 | ✓        |                                                                                                                  |
 | tipo_fraude = 'ninguno' <=> es_fraude = 0                                              |             0 | ✓        |                                                                                                                  |
-| n_tx_1h = transferencias previas del emisor en [t-1h, t)                               |             0 | ✓        | recalculado con pandas.rolling en 1,689,863 filas (desde 01/07 01:00; antes depende del historial de junio 2025) |
-| n_tx_24h = transferencias previas del emisor en [t-24h, t)                             |             0 | ✓        | recalculado con pandas.rolling en 1,685,813 filas (desde 02/07 00:00; antes depende del historial de junio 2025) |
-| monto_promedio_30d_gs = promedio de montos previos en 30 días                          |             0 | ✓        | recalculado en 1,560,945 filas (desde 31/07)                                                                     |
+| n_tx_1h = transferencias previas del emisor en [t-1h, t)                               |             0 | ✓        | recalculado con pandas.rolling en 1,692,409 filas (desde 01/07 01:00; antes depende del historial de junio 2025) |
+| n_tx_24h = transferencias previas del emisor en [t-24h, t)                             |             0 | ✓        | recalculado con pandas.rolling en 1,688,298 filas (desde 02/07 00:00; antes depende del historial de junio 2025) |
+| monto_promedio_30d_gs = promedio de montos previos en 30 días                          |             0 | ✓        | recalculado en 1,563,674 filas (desde 31/07)                                                                     |
 | destinatario_nuevo = True solo en la primera transferencia emisor->destino             |             0 | ✓        |                                                                                                                  |
-| Primera aparición del par en el dataset marcada como no nueva => ya pagó en junio 2025 |             0 | ✓        | 63,940 pares con historial previo en junio 2025 (fuera del CSV); no es un error                                  |
+| Primera aparición del par en el dataset marcada como no nueva => ya pagó en junio 2025 |             0 | ✓        | 62,115 pares con historial previo en junio 2025 (fuera del CSV); no es un error                                  |
 | dispositivo_nuevo = True solo si se vio por primera vez hace <= 24 h                   |             0 | ✓        |                                                                                                                  |
 
 ## Calidad por columna
 
 | columna                       | tipo_de_dato   |   faltantes |   pct_faltantes |   valores_distintos |
 |:------------------------------|:---------------|------------:|----------------:|--------------------:|
-| transaction_id                | str            |           0 |               0 |             1689911 |
-| timestamp                     | datetime64[us] |           0 |               0 |             1620947 |
-| cuenta_emisor_id              | str            |           0 |               0 |                8040 |
+| transaction_id                | str            |           0 |               0 |             1692473 |
+| timestamp                     | datetime64[us] |           0 |               0 |             1623820 |
+| cuenta_emisor_id              | str            |           0 |               0 |                8058 |
 | banco_origen                  | str            |           0 |               0 |                  12 |
 | banco_destino                 | str            |           0 |               0 |                  12 |
-| cuenta_destino_id             | str            |           0 |               0 |              169771 |
+| cuenta_destino_id             | str            |           0 |               0 |              215208 |
 | ciudad                        | str            |           0 |               0 |                  18 |
 | ciudad_habitual               | str            |           0 |               0 |                  18 |
-| dispositivo_id                | str            |           0 |               0 |               19181 |
-| monto_gs                      | int64          |           0 |               0 |              345872 |
-| n_tx_1h                       | int64          |           0 |               0 |                  13 |
-| n_tx_24h                      | int64          |           0 |               0 |                  18 |
-| monto_promedio_30d_gs         | int64          |           0 |               0 |              739979 |
+| dispositivo_id                | str            |           0 |               0 |               28340 |
+| monto_gs                      | int64          |           0 |               0 |              346804 |
+| n_tx_1h                       | int64          |           0 |               0 |                  12 |
+| n_tx_24h                      | int64          |           0 |               0 |                  21 |
+| monto_promedio_30d_gs         | int64          |           0 |               0 |              739762 |
 | destinatario_nuevo            | bool           |           0 |               0 |                   2 |
 | dispositivo_nuevo             | bool           |           0 |               0 |                   2 |
-| antiguedad_cuenta_origen_dias | int64          |           0 |               0 |               10610 |
+| antiguedad_cuenta_origen_dias | int64          |           0 |               0 |               10585 |
 | es_fraude                     | int64          |           0 |               0 |                   2 |
-| tipo_fraude                   | str            |           0 |               0 |                   5 |
+| tipo_fraude                   | str            |           0 |               0 |                   6 |
 
 ## Features según la clase (entrenamiento, jul 2025 - feb 2026)
 
 |                          |   legitima_mean |   legitima_median |   fraude_mean |   fraude_median |
 |:-------------------------|----------------:|------------------:|--------------:|----------------:|
-| log_monto                |         11.8772 |           11.6953 |       12.5002 |         11.9223 |
-| log_ratio_monto_promedio |         -0.8198 |           -0.927  |       -0.5922 |         -0.8787 |
-| sin_historial            |          0.0029 |            0      |        0.0712 |          0      |
-| hora                     |         14.2973 |           14      |       10.8743 |         12      |
-| es_nocturna              |          0.018  |            0      |        0.3403 |          0      |
-| dia_semana               |          2.8888 |            3      |        2.9738 |          3      |
-| es_fin_de_semana         |          0.257  |            0      |        0.266  |          0      |
-| es_fin_de_mes            |          0.224  |            0      |        0.2021 |          0      |
-| log_antiguedad_origen    |          7.1005 |            7.2182 |        6.6579 |          7.051  |
-| n_tx_1h                  |          0.1512 |            0      |        1.3455 |          1      |
-| n_tx_24h                 |          1.1464 |            1      |        2.0618 |          2      |
-| destinatario_nuevo       |          0.1997 |            0      |        0.7969 |          1      |
-| dispositivo_nuevo        |          0.0099 |            0      |        0.6199 |          1      |
-| ciudad_distinta          |          0.0503 |            0      |        0.2461 |          0      |
+| log_monto                |         11.8765 |           11.6953 |       12.7274 |         12.5434 |
+| log_ratio_monto_promedio |         -0.8241 |           -0.9316 |       -0.3462 |         -0.4358 |
+| sin_historial            |          0.0029 |            0      |        0.082  |          0      |
+| hora                     |         14.2956 |           14      |        9.8701 |         10      |
+| es_nocturna              |          0.0182 |            0      |        0.4058 |          0      |
+| dia_semana               |          2.8892 |            3      |        2.9137 |          3      |
+| es_fin_de_semana         |          0.2571 |            0      |        0.2609 |          0      |
+| es_fin_de_mes            |          0.2243 |            0      |        0.2247 |          0      |
+| log_antiguedad_origen    |          7.0936 |            7.2152 |        6.5396 |          7.1301 |
+| n_tx_1h                  |          0.1521 |            0      |        1.033  |          1      |
+| n_tx_24h                 |          1.1454 |            1      |        1.7391 |          1      |
+| destinatario_nuevo       |          0.2622 |            0      |        0.7742 |          1      |
+| dispositivo_nuevo        |          0.0179 |            0      |        0.6241 |          1      |
+| ciudad_distinta          |          0.0502 |            0      |        0.2694 |          0      |

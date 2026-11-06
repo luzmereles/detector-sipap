@@ -11,9 +11,9 @@ Promedio = 0 => sin transferencias en las últimas 24 h,0,True,
 antiguedad_cuenta_origen_dias >= 0,0,True,
 "es_fraude en {0, 1}",0,True,
 tipo_fraude = 'ninguno' <=> es_fraude = 0,0,True,
-"n_tx_1h = transferencias previas del emisor en [t-1h, t)",0,True,"recalculado con pandas.rolling en 1,689,863 filas (desde 01/07 01:00; antes depende del historial de junio 2025)"
-"n_tx_24h = transferencias previas del emisor en [t-24h, t)",0,True,"recalculado con pandas.rolling en 1,685,813 filas (desde 02/07 00:00; antes depende del historial de junio 2025)"
-monto_promedio_30d_gs = promedio de montos previos en 30 días,0,True,"recalculado en 1,560,945 filas (desde 31/07)"
+"n_tx_1h = transferencias previas del emisor en [t-1h, t)",0,True,"recalculado con pandas.rolling en 1,692,409 filas (desde 01/07 01:00; antes depende del historial de junio 2025)"
+"n_tx_24h = transferencias previas del emisor en [t-24h, t)",0,True,"recalculado con pandas.rolling en 1,688,298 filas (desde 02/07 00:00; antes depende del historial de junio 2025)"
+monto_promedio_30d_gs = promedio de montos previos en 30 días,0,True,"recalculado en 1,563,674 filas (desde 31/07)"
 destinatario_nuevo = True solo en la primera transferencia emisor->destino,0,True,
-Primera aparición del par en el dataset marcada como no nueva => ya pagó en junio 2025,0,True,"63,940 pares con historial previo en junio 2025 (fuera del CSV); no es un error"
+Primera aparición del par en el dataset marcada como no nueva => ya pagó en junio 2025,0,True,"62,115 pares con historial previo en junio 2025 (fuera del CSV); no es un error"
 dispositivo_nuevo = True solo si se vio por primera vez hace <= 24 h,0,True,
