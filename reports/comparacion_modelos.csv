@@ -1,0 +1,6 @@
+etapa,modelo,conjunto,umbral,average_precision,roc_auc,f1,precision,recall,tp,fp,fn,tn
+1 · sin ajustes,Regresión logística,validación,0.5,0.1322,0.9522,0.0169,0.0085,0.8111,146,16982,34,258744
+1 · sin ajustes,XGBoost + SMOTE,validación,0.5,0.3996,0.9408,0.1593,0.092,0.5944,107,1056,73,274670
+1 · sin ajustes,XGBoost ponderado,validación,0.5,0.4618,0.9421,0.1506,0.0845,0.6944,125,1355,55,274371
+2 · ajustado,XGBoost ponderado ajustado,validación,0.829,0.5614,0.9617,0.5887,0.8137,0.4611,83,19,97,275707
+3 · final,XGBoost ponderado ajustado,prueba,0.829,0.4887,0.9685,0.475,0.7037,0.3585,76,32,136,278680

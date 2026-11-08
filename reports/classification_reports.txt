@@ -1,0 +1,69 @@
+========================================================================
+1 · sin ajustes · Regresión logística · validación · umbral 0.5000
+              precision    recall  f1-score   support
+
+    legítima     0.9999    0.9384    0.9682    275726
+      fraude     0.0085    0.8111    0.0169       180
+
+    accuracy                         0.9383    275906
+   macro avg     0.5042    0.8748    0.4925    275906
+weighted avg     0.9992    0.9383    0.9675    275906
+confusion_matrix
+[[TN=258,744  FP=16,982]
+ [FN=34  TP=146]]
+
+========================================================================
+1 · sin ajustes · XGBoost + SMOTE · validación · umbral 0.5000
+              precision    recall  f1-score   support
+
+    legítima     0.9997    0.9962    0.9979    275726
+      fraude     0.0920    0.5944    0.1593       180
+
+    accuracy                         0.9959    275906
+   macro avg     0.5459    0.7953    0.5786    275906
+weighted avg     0.9991    0.9959    0.9974    275906
+confusion_matrix
+[[TN=274,670  FP=1,056]
+ [FN=73  TP=107]]
+
+========================================================================
+1 · sin ajustes · XGBoost ponderado · validación · umbral 0.5000
+              precision    recall  f1-score   support
+
+    legítima     0.9998    0.9951    0.9974    275726
+      fraude     0.0845    0.6944    0.1506       180
+
+    accuracy                         0.9949    275906
+   macro avg     0.5421    0.8448    0.5740    275906
+weighted avg     0.9992    0.9949    0.9969    275906
+confusion_matrix
+[[TN=274,371  FP=1,355]
+ [FN=55  TP=125]]
+
+========================================================================
+2 · ajustado · XGBoost ponderado ajustado · validación · umbral 0.8290
+              precision    recall  f1-score   support
+
+    legítima     0.9996    0.9999    0.9998    275726
+      fraude     0.8137    0.4611    0.5887       180
+
+    accuracy                         0.9996    275906
+   macro avg     0.9067    0.7305    0.7942    275906
+weighted avg     0.9995    0.9996    0.9995    275906
+confusion_matrix
+[[TN=275,707  FP=19]
+ [FN=97  TP=83]]
+
+========================================================================
+3 · final · XGBoost ponderado ajustado · prueba · umbral 0.8290
+              precision    recall  f1-score   support
+
+    legítima     0.9995    0.9999    0.9997    278712
+      fraude     0.7037    0.3585    0.4750       212
+
+    accuracy                         0.9994    278924
+   macro avg     0.8516    0.6792    0.7373    278924
+weighted avg     0.9993    0.9994    0.9993    278924
+confusion_matrix
+[[TN=278,680  FP=32]
+ [FN=136  TP=76]]
