@@ -1,0 +1,7 @@
+fastapi==0.162.0
+uvicorn==0.54.0
+pydantic==2.13.5
+xgboost-cpu==3.4.1
+pandas==3.0.6
+numpy==2.5.3
+tzdata
