@@ -16,4 +16,3 @@ tipo_fraude = 'ninguno' <=> es_fraude = 0,0,True,
 monto_promedio_30d_gs = promedio de montos previos en 30 días,0,True,"recalculado en 1,563,674 filas (desde 31/07)"
 destinatario_nuevo = True solo en la primera transferencia emisor->destino,0,True,
 Primera aparición del par en el dataset marcada como no nueva => ya pagó en junio 2025,0,True,"62,115 pares con historial previo en junio 2025 (fuera del CSV); no es un error"
-dispositivo_nuevo = True solo si se vio por primera vez hace <= 24 h,0,True,

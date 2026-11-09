@@ -1,4 +1,4 @@
-# dataset completo (~65 MB): se regenera con generar_datos.py (semilla fija = mismo resultado)
+# dataset completo (~56 MB): se regenera con generar_datos.py (semilla fija = mismo resultado)
 data/transacciones_spi.csv.gz
 
 __pycache__/
