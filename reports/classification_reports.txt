@@ -41,29 +41,29 @@ confusion_matrix
  [FN=55  TP=125]]
 
 ========================================================================
-2 · ajustado · XGBoost ponderado ajustado · validación · umbral 0.8290
+2 · ajustado · XGBoost ponderado ajustado · validación · umbral 0.7874
               precision    recall  f1-score   support
 
-    legítima     0.9996    0.9999    0.9998    275726
-      fraude     0.8137    0.4611    0.5887       180
+    legítima     0.9997    0.9999    0.9998    275726
+      fraude     0.7500    0.4833    0.5878       180
 
     accuracy                         0.9996    275906
-   macro avg     0.9067    0.7305    0.7942    275906
+   macro avg     0.8748    0.7416    0.7938    275906
 weighted avg     0.9995    0.9996    0.9995    275906
 confusion_matrix
-[[TN=275,707  FP=19]
- [FN=97  TP=83]]
+[[TN=275,697  FP=29]
+ [FN=93  TP=87]]
 
 ========================================================================
-3 · final · XGBoost ponderado ajustado · prueba · umbral 0.8290
+3 · final · XGBoost ponderado ajustado · prueba · umbral 0.7874
               precision    recall  f1-score   support
 
     legítima     0.9995    0.9999    0.9997    278712
-      fraude     0.7037    0.3585    0.4750       212
+      fraude     0.7368    0.3962    0.5153       212
 
     accuracy                         0.9994    278924
-   macro avg     0.8516    0.6792    0.7373    278924
+   macro avg     0.8682    0.6981    0.7575    278924
 weighted avg     0.9993    0.9994    0.9993    278924
 confusion_matrix
-[[TN=278,680  FP=32]
- [FN=136  TP=76]]
+[[TN=278,682  FP=30]
+ [FN=128  TP=84]]

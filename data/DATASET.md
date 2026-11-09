@@ -1,4 +1,4 @@
-# Data card — Transferencias SPI sintéticas (Paraguay, jul 2025 – jun 2026)
+# Data card — Transferencias sintéticas (Paraguay, jul 2025 – jun 2026)
 
 ## 1. ¿Por qué un dataset sintético?
 
@@ -17,6 +17,7 @@ simula clientes de bancos paraguayos e inyecta fraudes según tipologías conoci
 - No se distingue el canal de iniciación (app, web, PY-QR); no se incluyen pagos con tarjeta ni operaciones de POS.
 - Cada columna es información que el banco emisor conoce o puede calcular **al autorizar** la transferencia. No se usa
   información interna del banco receptor (por ejemplo, la antigüedad de la cuenta destino).
+- **Estimación de ubicación:** la ciudad desde donde se opera puede inferirse mediante distintos mecanismos, como la geolocalización del dispositivo (coordenadas GPS, cuando la aplicación bancaria dispone del permiso correspondiente) o la geolocalización aproximada de la dirección IP. Estas fuentes permiten contrastar la ubicación estimada de la operación con la ciudad habitual del cliente y detectar cambios que podrían constituir una señal de riesgo. La precisión depende de la fuente utilizada: la IP no garantiza una ubicación exacta y el GPS requiere autorización del usuario.
 
 ## 3. Resumen
 
@@ -25,7 +26,7 @@ simula clientes de bancos paraguayos e inyecta fraudes según tipologías conoci
 | Período | 1 de julio de 2025 – 30 de junio de 2026 (junio 2025 se simula solo como historial previo) |
 | Transferencias | 1.692.473 |
 | Fraudes | 1.331 transferencias en 505 casos (**0,0786 %**, ≈ 1 cada 1.270 transferencias) |
-| Clientes emisores simulados | 8.000 (+ 58 cuentas mula abiertas para cometer fraude = 8.058 emisores) |
+| Clientes emisores simulados | 8.000 (7.996 operan en el período) + 62 cuentas mula abiertas para cometer fraude = 8.058 emisores |
 | Cuentas destino distintas | 215.208 |
 | Bancos / ciudades | 12 / 18 |
 | Moneda | Guaraníes (Gs.) |
@@ -53,13 +54,14 @@ cientos de fraudes en cada partición.
 | `n_tx_24h` | entero | Transferencias anteriores del cliente durante las últimas 24 horas |
 | `monto_promedio_30d_gs` | entero | Promedio de los montos del cliente en los últimos 30 días; **0 si no tiene historial** |
 | `destinatario_nuevo` | booleano | Primera vez que el emisor transfiere a ese destinatario |
-| `dispositivo_nuevo` | booleano | El dispositivo se usó por primera vez hace menos de 24 horas, según el historial disponible |
+| `dispositivo_nuevo` | booleano | El dispositivo se usó por primera vez hace 24 horas o menos, según el historial disponible |
 | `antiguedad_cuenta_origen_dias` | entero | Días desde la apertura de la cuenta del emisor |
 | `es_fraude` | entero 0/1 | **Etiqueta objetivo**: 1 = fraude, 0 = legítima |
 | `tipo_fraude` | texto | Tipología (`ninguno` en las legítimas). **Solo para análisis; no se usa para entrenar** |
 
 Los identificadores de cuentas y dispositivos son códigos opacos (`CTA-…`, `DEV-…`) asignados al final de la
 simulación, para que ningún ID revele si pertenece a un escenario de fraude.
+
 
 **Sin valores faltantes.** Cuando un cliente no hizo transferencias en los 30 días anteriores, no existe un promedio;
 en ese caso `monto_promedio_30d_gs = 0` y la feature `sin_historial = 1` (5.077 transferencias, 0,30 %: sobre todo
@@ -75,8 +77,9 @@ historial de junio 2025, que no se exporta):
 - `destinatario_nuevo`: verdadero **solo si no existe una transferencia anterior del mismo emisor a la misma cuenta**.
 - `dispositivo_nuevo`: verdadero si ese emisor usó ese dispositivo por primera vez hace 24 h o menos.
 
-El notebook `01_eda.ipynb` recalcula estas variables de forma independiente con ventanas móviles de pandas y verifica
-que coincidan (0 diferencias).
+El notebook `01_eda.ipynb` recalcula `n_tx_1h`, `n_tx_24h` y `monto_promedio_30d_gs` de forma independiente con
+ventanas móviles de pandas, comprueba que `destinatario_nuevo` solo sea verdadero en la primera transferencia de cada
+par emisor → destino, y verifica que coincidan (0 diferencias). `dispositivo_nuevo` no se recalcula en el EDA.
 
 ## 5. Comportamiento legítimo simulado
 
@@ -86,14 +89,14 @@ que coincidan (0 diferencias).
 |---|---|---|
 | Regular | 80 % | cuenta abierta antes del período (7 % con menos de 90 días); opera con su frecuencia propia |
 | Nuevo | 10 % | abre la cuenta durante el año (jul 2025 – may 2026) y no opera antes de abrirla. La mayoría opera poco; una minoría (25 %) hace de 2 a 5 transferencias en sus primeros días a contactos y cuentas nuevas |
-| Esporádico | 10 % | 1 a 2 transferencias al mes; muchas veces no tiene historial en los últimos 30 días |
+| Esporádico | 10 % | entre 0,6 y 2,4 transferencias al mes (≈ 1 a 2); muchas veces no tiene historial en los últimos 30 días |
 
 Los clientes nuevos activos y los esporádicos se parecen a propósito a una cuenta mula (cuenta reciente o sin
 historial, varios destinatarios nuevos), pero hacen pagos legítimos de montos habituales.
 
 ### Hábitos
 
-- **Capacidad económica**: ingreso mensual lognormal centrado en ~1,25 salarios mínimos (**Gs. 3.044.000**); el 5 % de
+- **Capacidad económica**: ingreso mensual lognormal centrado en ~1,25 salarios mínimos (salario mínimo = **Gs. 3.044.000**); el 5 % de
   los clientes tiene mayor capacidad (3 a 6 veces). El salario mínimo genera diversidad, **no limita** lo que se transfiere.
 - **Frecuencia**: tasa diaria propia de cada cliente (gamma, media ≈ 0,66 transferencias por día en los regulares).
 - **Tipos de operación** (internos, no se exportan): pagos cotidianos 51,5 %, envíos a familiares y amigos 37 %, pagos
@@ -102,7 +105,8 @@ historial, varios destinatarios nuevos), pero hacen pagos legítimos de montos h
 - **Importes realistas**: redondeo a múltiplos de 1, 100, 1.000, 10.000 o 50.000 Gs.; el 48 % no es múltiplo de 1.000
   (ej.: Gs. 5.699) y solo el 17 % es múltiplo de 10.000.
 - **Calendario**: +40 % de movimiento a **fin de mes** (últimos 5 días); en **diciembre** (aguinaldo) +30 % de
-  movimiento, un pico del 18 al 24 y **montos 25 % más altos** (monto medio Gs. 506.000 contra ~Gs. 414.000 el resto del año).
+  movimiento, un pico del 18 al 24 y **importes multiplicados por 1,25** (en los datos, el monto medio sube ~22 %:
+  Gs. 506.000 contra ~Gs. 414.000 el resto del año).
 - **Sesiones de varios pagos seguidos**: algunos clientes pagan varias cuentas en pocos minutos (servicios, sueldo del
   personal doméstico), sobre todo a fin de mes, en horario diurno y a destinatarios habituales.
 - **Horario**: picos al mediodía y a la salida del trabajo; 2 % de clientes "noctámbulos".
@@ -124,15 +128,16 @@ Es intencional: **ninguna señal por sí sola alcanza** para decidir que una tra
 
 ## 6. Tipologías de fraude
 
-Los porcentajes son de **casos** (505 en total). Un caso puede tener varias transferencias; el orden se mantiene
-también en cantidad de transferencias. Cada tipología es una **combinación** de señales, y ninguna señal está presente
-en todos los casos.
+Los porcentajes son de **casos** (505 en total: 202 tomas de cuenta, 76 ráfagas, 101 cuentas mula, 76 de ingeniería
+social y 50 camuflados). Un caso puede tener varias transferencias, por eso en cantidad de transferencias el orden
+cambia: la ráfaga (3 a 7 transferencias por caso) supera a la cuenta mula aunque tenga menos casos. Cada tipología es
+una **combinación** de señales, y ninguna señal está presente en todos los casos.
 
 | Tipología | % de casos | Cómo se simula | Transferencias (% del fraude) |
 |---|---|---|---|
-| **Toma de cuenta** (phishing, robo de credenciales) | 40 % | Al atacante se le ve **al menos 2** de estas señales: dispositivo nuevo (~80 %), madrugada 0–5 h (~55 %), otra ciudad (~45 %). 1 a 4 transferencias, a cuentas nuevas. Monto: 50 % alto (varias veces su promedio o intento de vaciar la cuenta), 30 % parecido al habitual, 20 % menor | 503 (37,8 %) |
+| **Toma de cuenta** (phishing, robo de credenciales) | 40 % | Al atacante se le ve **al menos 2** de estas señales: dispositivo nuevo (~80 %), madrugada 0–5 h (~55 %), otra ciudad (~45 %) (probabilidades iniciales; al exigir 2 o más, en los datos quedan ~84 %, ~75 % y ~66 %). 1 a 4 transferencias, a cuentas nuevas. Monto: 50 % alto (varias veces su promedio o intento de vaciar la cuenta), 30 % parecido al habitual, 20 % menor | 503 (37,8 %) |
 | **Ráfaga de transferencias** (fraccionamiento) | 15 % | 3 a 7 transferencias de **montos bajos** (20 % a 80 % del habitual) con 0,5 a 4 minutos entre sí, a varias cuentas; dispositivo nuevo 35 %, madrugada 25 % | 360 (27,0 %) |
-| **Cuenta mula** (el **emisor** es la mula) | 20 % | Cuenta que mueve dinero de golpe: 60 % **recién abierta** (0 a 60 días, sin historial) y 40 % **dormida** (cliente esporádico sin movimientos en 30 días o más). 2 a 5 transferencias de montos altos (Gs. 1 a 6 millones, en general), 90 % a destinos nuevos; dispositivo nuevo en las cuentas recién abiertas y en la mitad de las dormidas | 308 (23,1 %) |
+| **Cuenta mula** (el **emisor** es la mula) | 20 % | Cuenta que mueve dinero de golpe: 60 % **recién abierta** (0 a 60 días, sin historial) y 40 % **dormida** (cliente esporádico sin movimientos en 30 días o más). 2 a 5 transferencias de montos altos (Gs. 1 a 6 millones, en general), 90 % a destinos nuevos; dispositivo nuevo en las cuentas recién abiertas y en la mitad de las dormidas; 25 % de madrugada | 308 (23,1 %) |
 | **Ingeniería social** (estafas por WhatsApp o Marketplace) | 15 % | La víctima usa **su propio dispositivo** y **su horario habitual**; destinatario nuevo (~85 %), monto 1,5 a 4 veces su promedio; en el 40 % de los casos paga de nuevo horas después ("falta un pago más") | 110 (8,3 %) |
 | **Camuflado** | 10 % | Imita dispositivo, horario, importe (0,8 a 1,8 veces su monto típico) y frecuencia normales; el 40 % va a la cuenta de un contacto habitual comprometida | 50 (3,8 %) |
 
@@ -156,12 +161,12 @@ El dataset se genera **limpio desde su creación**. `notebooks/01_eda.ipynb` lo 
 
 | Archivo | Contenido |
 |---|---|
-| `01_calidad_integridad.png`, `calidad_columnas.csv`, `restricciones.csv` | faltantes, tipos, duplicados y 18 restricciones verificadas (todas se cumplen) |
+| `01_calidad_integridad.png`, `calidad_columnas.csv`, `restricciones.csv` | faltantes, tipos, duplicados y 17 restricciones verificadas (todas se cumplen) |
 | `02_distribucion_montos.png` | montos por clase, rangos y redondeo de los importes |
 | `03_variables_principales.png` | transferencias por día, hora, día del mes, ventanas y antigüedad |
 | `04_distribucion_clases.png` | clases, tasa de fraude por mes y tipologías |
 | `05` a `07` | features según la clase y señales por tipología (solo entrenamiento) |
-| `08_dispersion_pares.png`, `09_proyeccion_pca.png` | dispersión y proyección PCA para ver el solapamiento |
+| `08_dispersion_pares.png` | dispersión de `log_monto` contra `log_ratio_monto_promedio` (20.000 legítimas y todos los fraudes) para ver el solapamiento |
 | `EDA.md` | resumen numérico generado por el notebook |
 
 ## 8. Partición temporal
@@ -172,7 +177,7 @@ División **temporal**, no aleatoria (definida en `features.py`):
 |---|---|---|---|
 | Entrenamiento | jul 2025 – feb 2026 | 1.137.643 | 939 |
 | Validación (primera prueba, ajuste de hiperparámetros y umbral) | mar – abr 2026 | 275.906 | 180 |
-| Prueba (evaluación final, una sola vez) | may – jun 2026 | 278.924 | 212 |
+| Prueba | may – jun 2026 | 278.924 | 212 |
 
 La tasa de fraude varía entre meses (0,05 % – 0,10 %) porque los fraudes llegan en casos de varias transferencias.
 
