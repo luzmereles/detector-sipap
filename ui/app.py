@@ -292,9 +292,7 @@ with tab3:
             st.markdown("#### Comparación de modelos (etapa 1 y 2: validación mar-abr 2026 · etapa 3: prueba may-jun 2026)")
             st.dataframe(pd.read_csv(COMPARACION), hide_index=True, width="stretch")
         figuras = sorted(FIGURAS.glob("*.png")) if FIGURAS.exists() else []
-        for i in range(0, len(figuras), 2):
-            cols = st.columns(2)
-            for col, fig in zip(cols, figuras[i:i + 2]):
-                col.image(str(fig), width="stretch")
+        if figuras:
+            st.image(str(figuras[0]), width="stretch")   # solo la primera figura (01_etapa1_metricas_validacion.png)
         with st.expander("Hiperparámetros elegidos por Optuna (etapa 2)"):
             st.json(meta["hiperparametros"])
