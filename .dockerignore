@@ -1,0 +1,18 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ipynb_checkpoints
+.venv
+venv
+# las imágenes solo necesitan: api/, ui/, features.py, models/, data/demo/, reports/figures/
+data/*.csv.gz
+data/muestra_transacciones.csv
+generar_datos.py
+notebooks
+reports/eda
+tests
+docs
+*.md
+!README.md

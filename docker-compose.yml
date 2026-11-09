@@ -1,0 +1,30 @@
+name: detector-sip
+# Levanta todo el sistema con un solo comando:
+#   docker compose up --build
+# UI:  http://localhost:8501     API (Swagger): http://localhost:8000/docs
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: detector-sip-api:1.0
+    container_name: detector-sip-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    image: detector-sip-ui:1.0
+    container_name: detector-sip-ui
+    ports:
+      - "8501:8501"
+    environment:
+      API_URL: http://api:8000              # comunicación interna entre contenedores
+      PUBLIC_API_URL: http://localhost:8000 # enlace a Swagger que abre el navegador
+    depends_on:
+      api:
+        condition: service_healthy          # la UI arranca recién cuando la API está lista
+    restart: unless-stopped
